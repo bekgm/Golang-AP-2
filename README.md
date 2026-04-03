@@ -1,43 +1,5 @@
 # Order & Payment Platform — AP2 Assignment 1
 
-## Architecture Overview
-
-This project implements a two-service platform following **Clean Architecture** and **Microservices** principles.
-
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│                          CLIENT (curl / Postman)                     │
-└───────────────────────┬──────────────────────────────────────────────┘
-                        │ REST
-            ┌───────────▼────────────┐
-            │     Order Service      │  :8080
-            │  ┌──────────────────┐  │
-            │  │  HTTP Handler    │  │  ← Delivery Layer (thin)
-            │  │  (Gin)           │  │
-            │  ├──────────────────┤  │
-            │  │  Use Case        │  │  ← Business Logic
-            │  ├──────────────────┤  │
-            │  │  Repository      │  │  ← Persistence (Port impl.)
-            │  │  PaymentClient   │  │  ← Outbound Port impl.
-            │  └──────────────────┘  │
-            │         │              │
-            │    orders_db (PG)      │
-            └───────────┬────────────┘
-                        │ POST /payments  (HTTP, 2s timeout)
-            ┌───────────▼────────────┐
-            │    Payment Service     │  :8081
-            │  ┌──────────────────┐  │
-            │  │  HTTP Handler    │  │  ← Delivery Layer (thin)
-            │  ├──────────────────┤  │
-            │  │  Use Case        │  │  ← Business Logic
-            │  ├──────────────────┤  │
-            │  │  Repository      │  │  ← Persistence (Port impl.)
-            │  └──────────────────┘  │
-            │                        │
-            │   payments_db (PG)     │
-            └────────────────────────┘
-```
-
 ## Bounded Contexts
 
 | Context | Owns | Does NOT touch |
