@@ -4,10 +4,9 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/gin-gonic/gin"
 	"payment-service/internal/domain"
 	"payment-service/internal/usecase"
-
-	"github.com/gin-gonic/gin"
 )
 
 type PaymentHandler struct {
@@ -32,7 +31,6 @@ type paymentResponse struct {
 	CreatedAt     string `json:"created_at"`
 }
 
-// Authorize handles POST /payments
 func (h *PaymentHandler) Authorize(c *gin.Context) {
 	var req authorizeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -53,12 +51,9 @@ func (h *PaymentHandler) Authorize(c *gin.Context) {
 		return
 	}
 
-	// Return 200 for both Authorized and Declined — the outcome is in the body.
-	// The Order Service reads the "status" field to decide the order's final state.
 	c.JSON(http.StatusOK, toPaymentResponse(output.Payment))
 }
 
-// GetByOrderID handles GET /payments/:order_id
 func (h *PaymentHandler) GetByOrderID(c *gin.Context) {
 	orderID := c.Param("order_id")
 

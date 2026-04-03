@@ -1,5 +1,3 @@
--- migrations/001_create_orders.sql
--- Run this against your orders_db PostgreSQL database.
 
 CREATE TABLE IF NOT EXISTS orders (
     id              VARCHAR(36)  PRIMARY KEY,
@@ -11,9 +9,7 @@ CREATE TABLE IF NOT EXISTS orders (
     created_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
 
--- Index for fast idempotency key lookups
 CREATE INDEX IF NOT EXISTS idx_orders_idempotency_key ON orders(idempotency_key)
     WHERE idempotency_key IS NOT NULL;
 
--- Index for customer queries (useful extension)
 CREATE INDEX IF NOT EXISTS idx_orders_customer_id ON orders(customer_id);

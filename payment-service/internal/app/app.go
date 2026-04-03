@@ -8,7 +8,6 @@ import (
 	_ "github.com/lib/pq"
 )
 
-// Config holds all runtime configuration for the Payment Service.
 type Config struct {
 	HTTPPort   string
 	DBHost     string
@@ -18,7 +17,6 @@ type Config struct {
 	DBName     string
 }
 
-// NewPostgresDB opens and verifies a PostgreSQL connection.
 func NewPostgresDB(cfg Config) (*sql.DB, error) {
 	dsn := fmt.Sprintf(
 		"host=%s port=%s user=%s password=%s dbname=%s sslmode=disable",

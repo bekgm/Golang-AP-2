@@ -10,9 +10,6 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// OrderHandler is the delivery layer. Thin by design:
-// parse request → call use case → map result to HTTP response.
-// NO business logic lives here.
 type OrderHandler struct {
 	uc *usecase.OrderUseCase
 }

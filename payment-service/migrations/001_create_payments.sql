@@ -1,4 +1,3 @@
-
 CREATE TABLE IF NOT EXISTS payments (
     id             VARCHAR(36)  PRIMARY KEY,
     order_id       VARCHAR(36)  NOT NULL,
@@ -8,5 +7,4 @@ CREATE TABLE IF NOT EXISTS payments (
     created_at     TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
 
--- Index for fast order_id lookups (used by GET /payments/:order_id)
 CREATE INDEX IF NOT EXISTS idx_payments_order_id ON payments(order_id);

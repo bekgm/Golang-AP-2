@@ -9,14 +9,11 @@ import (
 	"github.com/google/uuid"
 )
 
-// OrderUseCase contains all business logic for orders.
-// It depends only on interfaces (Ports), never on concrete implementations.
 type OrderUseCase struct {
 	repo          domain.OrderRepository
 	paymentClient domain.PaymentClient
 }
 
-// NewOrderUseCase constructs the use case with its dependencies injected.
 func NewOrderUseCase(repo domain.OrderRepository, paymentClient domain.PaymentClient) *OrderUseCase {
 	return &OrderUseCase{
 		repo:          repo,
@@ -24,7 +21,6 @@ func NewOrderUseCase(repo domain.OrderRepository, paymentClient domain.PaymentCl
 	}
 }
 
-// CreateOrderInput is the DTO coming into the use case from the delivery layer.
 type CreateOrderInput struct {
 	CustomerID      string
 	ItemName        string
@@ -37,8 +33,6 @@ type CreateOrderOutput struct {
 	Order *domain.Order
 }
 
-// CreateOrder orchestrates: persist → authorize payment → update status.
-// This is the core business flow and lives entirely in the use case layer.
 func (uc *OrderUseCase) CreateOrder(input CreateOrderInput) (*CreateOrderOutput, error) {
 	order := &domain.Order{
 		ID:         uuid.NewString(),
@@ -76,9 +70,8 @@ func (uc *OrderUseCase) CreateOrder(input CreateOrderInput) (*CreateOrderOutput,
 		Amount:  order.Amount,
 	})
 
-	// Step 3: Update order status based on payment outcome
 	if err != nil {
-		// Payment service unavailable or timed out — mark as Failed
+	
 		order.Status = domain.StatusFailed
 		_ = uc.repo.Update(order)
 		return nil, fmt.Errorf("payment service unavailable: %w", err)
@@ -97,7 +90,6 @@ func (uc *OrderUseCase) CreateOrder(input CreateOrderInput) (*CreateOrderOutput,
 	return &CreateOrderOutput{Order: order}, nil
 }
 
-// GetOrder retrieves an order by ID.
 func (uc *OrderUseCase) GetOrder(id string) (*domain.Order, error) {
 	order, err := uc.repo.FindByID(id)
 	if err != nil {
@@ -106,14 +98,12 @@ func (uc *OrderUseCase) GetOrder(id string) (*domain.Order, error) {
 	return order, nil
 }
 
-// CancelOrder enforces the cancellation invariant and persists the change.
 func (uc *OrderUseCase) CancelOrder(id string) (*domain.Order, error) {
 	order, err := uc.repo.FindByID(id)
 	if err != nil {
 		return nil, fmt.Errorf("order not found: %w", err)
 	}
 
-	// Domain invariant check — business rule lives here, not in the handler
 	if err := order.CanBeCancelled(); err != nil {
 		return nil, err
 	}

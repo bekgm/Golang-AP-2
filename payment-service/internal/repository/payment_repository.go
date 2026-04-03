@@ -8,7 +8,6 @@ import (
 	"payment-service/internal/domain"
 )
 
-// PostgresPaymentRepository implements domain.PaymentRepository.
 type PostgresPaymentRepository struct {
 	db *sql.DB
 }
@@ -17,7 +16,6 @@ func NewPostgresPaymentRepository(db *sql.DB) *PostgresPaymentRepository {
 	return &PostgresPaymentRepository{db: db}
 }
 
-// Save inserts a payment record.
 func (r *PostgresPaymentRepository) Save(p *domain.Payment) error {
 	query := `
 		INSERT INTO payments (id, order_id, transaction_id, amount, status, created_at)
@@ -37,7 +35,6 @@ func (r *PostgresPaymentRepository) Save(p *domain.Payment) error {
 	return nil
 }
 
-// FindByOrderID retrieves a payment by the associated order ID.
 func (r *PostgresPaymentRepository) FindByOrderID(orderID string) (*domain.Payment, error) {
 	query := `
 		SELECT id, order_id, transaction_id, amount, status, created_at

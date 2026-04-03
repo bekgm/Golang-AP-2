@@ -22,16 +22,12 @@ func main() {
 	}
 	defer db.Close()
 
-	// --- Repository (Port implementation) ---
 	paymentRepo := repository.NewPostgresPaymentRepository(db)
 
-	// --- Use Case (Business Logic) ---
 	paymentUseCase := usecase.NewPaymentUseCase(paymentRepo)
 
-	// --- Delivery Layer ---
 	paymentHandler := handler.NewPaymentHandler(paymentUseCase)
 
-	// --- Router ---
 	r := gin.Default()
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"service": "payment-service", "status": "ok"})
