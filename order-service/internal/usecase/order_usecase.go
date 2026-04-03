@@ -22,10 +22,10 @@ func NewOrderUseCase(repo domain.OrderRepository, paymentClient domain.PaymentCl
 }
 
 type CreateOrderInput struct {
-	CustomerID      string
-	ItemName        string
-	Amount          int64
-	IdempotencyKey  string
+	CustomerID     string
+	ItemName       string
+	Amount         int64
+	IdempotencyKey string
 }
 
 // CreateOrderOutput is the DTO returned to the delivery layer.
@@ -71,7 +71,7 @@ func (uc *OrderUseCase) CreateOrder(input CreateOrderInput) (*CreateOrderOutput,
 	})
 
 	if err != nil {
-	
+
 		order.Status = domain.StatusFailed
 		_ = uc.repo.Update(order)
 		return nil, fmt.Errorf("payment service unavailable: %w", err)
@@ -114,4 +114,10 @@ func (uc *OrderUseCase) CancelOrder(id string) (*domain.Order, error) {
 	}
 
 	return order, nil
+}
+func (uc *OrderUseCase) GetRecentOrders(limit int) ([]*domain.Order, error) {
+	if limit < 1 {
+		limit = 10
+	}
+	return uc.repo.FindRecent(limit)
 }

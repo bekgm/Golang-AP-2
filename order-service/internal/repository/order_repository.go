@@ -8,30 +8,31 @@ import (
 	"order-service/internal/domain"
 )
 
-// PostgresOrderRepository is the concrete implementation of domain.OrderRepository.
-// It speaks SQL and knows about the database schema — business logic must NOT live here.
 type PostgresOrderRepository struct {
 	db *sql.DB
 }
 
-// NewPostgresOrderRepository constructs the repository with a shared DB connection.
 func NewPostgresOrderRepository(db *sql.DB) *PostgresOrderRepository {
 	return &PostgresOrderRepository{db: db}
 }
 
-// Save inserts a new order into the database.
 func (r *PostgresOrderRepository) Save(order *domain.Order) error {
 	query := `
 		INSERT INTO orders (id, customer_id, item_name, amount, status, idempotency_key, created_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
 	`
+	var idempotencyKey sql.NullString
+	if order.IdempotencyKey != "" {
+		idempotencyKey = sql.NullString{String: order.IdempotencyKey, Valid: true}
+	}
+
 	_, err := r.db.Exec(query,
 		order.ID,
 		order.CustomerID,
 		order.ItemName,
 		order.Amount,
 		order.Status,
-		order.IdempotencyKey,
+		idempotencyKey,
 		order.CreatedAt,
 	)
 	if err != nil {
@@ -40,7 +41,6 @@ func (r *PostgresOrderRepository) Save(order *domain.Order) error {
 	return nil
 }
 
-// FindByID retrieves an order by its primary key.
 func (r *PostgresOrderRepository) FindByID(id string) (*domain.Order, error) {
 	query := `
 		SELECT id, customer_id, item_name, amount, status, idempotency_key, created_at
@@ -74,7 +74,6 @@ func (r *PostgresOrderRepository) FindByID(id string) (*domain.Order, error) {
 	return &order, nil
 }
 
-// Update writes the updated status back to the database.
 func (r *PostgresOrderRepository) Update(order *domain.Order) error {
 	query := `UPDATE orders SET status = $1 WHERE id = $2`
 	result, err := r.db.Exec(query, order.Status, order.ID)
@@ -88,8 +87,6 @@ func (r *PostgresOrderRepository) Update(order *domain.Order) error {
 	return nil
 }
 
-// FindByIdempotencyKey looks up an existing order by its idempotency key.
-// Returns nil, nil if no order exists with that key.
 func (r *PostgresOrderRepository) FindByIdempotencyKey(key string) (*domain.Order, error) {
 	if key == "" {
 		return nil, nil
@@ -124,4 +121,37 @@ func (r *PostgresOrderRepository) FindByIdempotencyKey(key string) (*domain.Orde
 	}
 
 	return &order, nil
+}
+func (r *PostgresOrderRepository) FindRecent(Limit int) ([]*domain.Order, error) {
+	query := `
+		SELECT id, customer_id, item_name, amount, status, idempotency_key, created_at
+		FROM orders ORDER BY created_at DESC LIMIT $1
+		`
+	rows, err := r.db.Query(query, Limit)
+	if err != nil {
+		return nil, fmt.Errorf("postgres: find recent orders: %w", err)
+	}
+	defer rows.Close()
+
+	var orders []*domain.Order
+	for rows.Next() {
+		var order domain.Order
+		var idempotencyKey sql.NullString
+		if err := rows.Scan(
+			&order.ID,
+			&order.CustomerID,
+			&order.ItemName,
+			&order.Amount,
+			&order.Status,
+			&idempotencyKey,
+			&order.CreatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("postgres:scan recent order: %w", err)
+		}
+		if idempotencyKey.Valid {
+			order.IdempotencyKey = idempotencyKey.String
+		}
+		orders = append(orders, &order)
+	}
+	return orders, nil
 }

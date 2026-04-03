@@ -29,6 +29,6 @@ func NewPostgresDB(cfg Config) (*sql.DB, error) {
 	if err := db.Ping(); err != nil {
 		return nil, fmt.Errorf("postgres: ping: %w", err)
 	}
-	log.Println("✅ Payment Service: connected to PostgreSQL")
+	log.Println("Payment Service: connected to PostgreSQL")
 	return db, nil
 }

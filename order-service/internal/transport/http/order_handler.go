@@ -8,6 +8,7 @@ import (
 	"order-service/internal/usecase"
 
 	"github.com/gin-gonic/gin"
+	"strconv"
 )
 
 type OrderHandler struct {
@@ -99,6 +100,7 @@ func (h *OrderHandler) CancelOrder(c *gin.Context) {
 
 func (h *OrderHandler) RegisterRoutes(r *gin.Engine) {
 	r.POST("/orders", h.CreateOrder)
+	r.GET("/orders/recent", h.GetRecentOrders) // static route must be before :id
 	r.GET("/orders/:id", h.GetOrder)
 	r.PATCH("/orders/:id/cancel", h.CancelOrder)
 }
@@ -112,4 +114,25 @@ func toResponse(o *domain.Order) orderResponse {
 		Status:     o.Status,
 		CreatedAt:  o.CreatedAt.Format("2006-01-02T15:04:05Z"),
 	}
+}
+func (h *OrderHandler) GetRecentOrders(c *gin.Context) {
+	limitStr := c.DefaultQuery("limit", "10")
+	limit, err := strconv.Atoi(limitStr)
+	if err != nil || limit < 1 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid limit parameter"})
+		return
+	}
+
+	orders, err := h.uc.GetRecentOrders(limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	result := make([]orderResponse, len(orders))
+	for i, order := range orders {
+		result[i] = toResponse(order)
+	}
+
+	c.JSON(http.StatusOK, result)
 }
