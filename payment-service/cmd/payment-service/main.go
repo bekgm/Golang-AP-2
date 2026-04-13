@@ -38,7 +38,7 @@ func main() {
 			grpc.UnaryInterceptor(grpchandler.LoggingUnaryInterceptor),
 		)
 		paymentv1.RegisterPaymentServiceServer(grpcServer, grpchandler.NewPaymentGRPCServer(paymentUseCase))
-		log.Printf("🔌 Payment gRPC Server starting on :%s", cfg.GRPCPort)
+		log.Printf("Payment gRPC Server starting on :%s", cfg.GRPCPort)
 		if err := grpcServer.Serve(lis); err != nil {
 			log.Fatalf("gRPC server error: %v", err)
 		}
