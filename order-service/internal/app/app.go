@@ -8,24 +8,27 @@ import (
 	_ "github.com/lib/pq"
 )
 
-// Config holds all runtime configuration for the Order Service.
 type Config struct {
-	HTTPPort           string
-	DBHost             string
-	DBPort             string
-	DBUser             string
-	DBPassword         string
-	DBName             string
-	PaymentServiceURL  string
-	PaymentTimeoutSecs int
+	HTTPPort               string
+	GRPCPort               string
+	DBHost                 string
+	DBPort                 string
+	DBUser                 string
+	DBPassword             string
+	DBName                 string
+	PaymentServiceGRPCAddr string
+	PaymentTimeoutSecs     int
 }
 
-// NewPostgresDB opens and verifies a PostgreSQL connection.
-func NewPostgresDB(cfg Config) (*sql.DB, error) {
-	dsn := fmt.Sprintf(
+func BuildDSN(cfg Config) string {
+	return fmt.Sprintf(
 		"host=%s port=%s user=%s password=%s dbname=%s sslmode=disable",
 		cfg.DBHost, cfg.DBPort, cfg.DBUser, cfg.DBPassword, cfg.DBName,
 	)
+}
+
+func NewPostgresDB(cfg Config) (*sql.DB, error) {
+	dsn := BuildDSN(cfg)
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("postgres: open: %w", err)

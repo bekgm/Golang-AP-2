@@ -28,7 +28,6 @@ type CreateOrderInput struct {
 	IdempotencyKey string
 }
 
-// CreateOrderOutput is the DTO returned to the delivery layer.
 type CreateOrderOutput struct {
 	Order *domain.Order
 }
@@ -43,28 +42,24 @@ func (uc *OrderUseCase) CreateOrder(input CreateOrderInput) (*CreateOrderOutput,
 		CreatedAt:  time.Now().UTC(),
 	}
 
-	// Enforce domain invariants before persisting
 	if err := order.Validate(); err != nil {
 		return nil, fmt.Errorf("validation error: %w", err)
 	}
 
-	// Idempotency: check if an order with this key already exists
 	if input.IdempotencyKey != "" {
 		existing, err := uc.repo.FindByIdempotencyKey(input.IdempotencyKey)
 		if err == nil && existing != nil {
-			// Return the existing order instead of creating a duplicate
+
 			return &CreateOrderOutput{Order: existing}, nil
 		}
 	}
 
 	order.IdempotencyKey = input.IdempotencyKey
 
-	// Step 1: Persist with "Pending" status
 	if err := uc.repo.Save(order); err != nil {
 		return nil, fmt.Errorf("failed to save order: %w", err)
 	}
 
-	// Step 2: Call Payment Service (synchronous REST)
 	payResp, err := uc.paymentClient.Authorize(domain.PaymentRequest{
 		OrderID: order.ID,
 		Amount:  order.Amount,

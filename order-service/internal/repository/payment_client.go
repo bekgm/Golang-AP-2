@@ -1,73 +1,48 @@
 package repository
 
 import (
-	"bytes"
-	"encoding/json"
+	"context"
 	"fmt"
-	"net/http"
+	"time"
 
+	paymentv1 "github.com/bekgm/ap2-generated/payment/v1"
 	"order-service/internal/domain"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
-// paymentRequestDTO is the JSON payload sent to the Payment Service.
-type paymentRequestDTO struct {
-	OrderID string `json:"order_id"`
-	Amount  int64  `json:"amount"`
+type GRPCPaymentClient struct {
+	client  paymentv1.PaymentServiceClient
+	timeout time.Duration
 }
 
-// paymentResponseDTO is the JSON response from the Payment Service.
-type paymentResponseDTO struct {
-	TransactionID string `json:"transaction_id"`
-	Status        string `json:"status"`
-	Message       string `json:"message,omitempty"`
+func NewGRPCPaymentClient(client paymentv1.PaymentServiceClient, timeout time.Duration) *GRPCPaymentClient {
+	return &GRPCPaymentClient{client: client, timeout: timeout}
 }
 
-// HTTPPaymentClient implements domain.PaymentClient using a real HTTP client.
-// The Timeout on the http.Client is set at the Composition Root (main.go).
-type HTTPPaymentClient struct {
-	httpClient     *http.Client
-	paymentBaseURL string
-}
+func (c *GRPCPaymentClient) Authorize(req domain.PaymentRequest) (*domain.PaymentResponse, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
+	defer cancel()
 
-// NewHTTPPaymentClient constructs the adapter.
-func NewHTTPPaymentClient(client *http.Client, baseURL string) *HTTPPaymentClient {
-	return &HTTPPaymentClient{
-		httpClient:     client,
-		paymentBaseURL: baseURL,
-	}
-}
-
-// Authorize sends a POST /payments request to the Payment Service.
-// It returns an error (which signals the Order Service to return 503) if:
-//   - the HTTP call fails (network error, timeout)
-//   - the response cannot be parsed
-func (c *HTTPPaymentClient) Authorize(req domain.PaymentRequest) (*domain.PaymentResponse, error) {
-	body, err := json.Marshal(paymentRequestDTO{
-		OrderID: req.OrderID,
+	resp, err := c.client.ProcessPayment(ctx, &paymentv1.PaymentRequest{
+		OrderId: req.OrderID,
 		Amount:  req.Amount,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("payment client: marshal request: %w", err)
-	}
-
-	resp, err := c.httpClient.Post(
-		c.paymentBaseURL+"/payments",
-		"application/json",
-		bytes.NewReader(body),
-	)
-	if err != nil {
-		// This covers timeouts (context deadline exceeded) and network failures
-		return nil, fmt.Errorf("payment service unavailable: %w", err)
-	}
-	defer resp.Body.Close()
-
-	var dto paymentResponseDTO
-	if err := json.NewDecoder(resp.Body).Decode(&dto); err != nil {
-		return nil, fmt.Errorf("payment client: decode response: %w", err)
+		st, _ := status.FromError(err)
+		switch st.Code() {
+		case codes.InvalidArgument:
+			return nil, fmt.Errorf("validation error: %s", st.Message())
+		case codes.Unavailable, codes.DeadlineExceeded:
+			return nil, fmt.Errorf("payment service unavailable: %s", st.Message())
+		default:
+			return nil, fmt.Errorf("payment service error: %s", st.Message())
+		}
 	}
 
 	return &domain.PaymentResponse{
-		TransactionID: dto.TransactionID,
-		Status:        dto.Status,
+		TransactionID: resp.GetTransactionId(),
+		Status:        resp.GetStatus(),
 	}, nil
 }

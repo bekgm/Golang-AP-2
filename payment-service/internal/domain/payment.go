@@ -16,7 +16,7 @@ type Payment struct {
 	ID            string
 	OrderID       string
 	TransactionID string
-	Amount        int64 // Amount in cents
+	Amount        int64
 	Status        string
 	CreatedAt     time.Time
 }

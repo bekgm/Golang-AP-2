@@ -9,7 +9,7 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: orders_db
     ports:
-      - "5432:5432"
+      - "5435:5432"
     volumes:
       - orders_data:/var/lib/postgresql/data
       - ./order-service/migrations:/docker-entrypoint-initdb.d
@@ -27,7 +27,7 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: payments_db
     ports:
-      - "5433:5432"
+      - "5436:5432"
     volumes:
       - payments_data:/var/lib/postgresql/data
       - ./payment-service/migrations:/docker-entrypoint-initdb.d
@@ -39,11 +39,12 @@ services:
 
   payment-service:
     build:
-      context: ./payment-service
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: payment-service/Dockerfile
     container_name: payment-service
     environment:
       HTTP_PORT: "8081"
+      GRPC_PORT: "9091"
       DB_HOST: payments-db
       DB_PORT: "5432"
       DB_USER: postgres
@@ -51,26 +52,29 @@ services:
       DB_NAME: payments_db
     ports:
       - "8081:8081"
+      - "9091:9091"   # gRPC — called by Order Service
     depends_on:
       payments-db:
         condition: service_healthy
 
   order-service:
     build:
-      context: ./order-service
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: order-service/Dockerfile
     container_name: order-service
     environment:
       HTTP_PORT: "8080"
+      GRPC_PORT: "9090"
       DB_HOST: orders-db
       DB_PORT: "5432"
       DB_USER: postgres
       DB_PASSWORD: postgres
       DB_NAME: orders_db
-      PAYMENT_SERVICE_URL: "http://payment-service:8081"
-      PAYMENT_TIMEOUT_SECS: "2"
+      PAYMENT_SERVICE_GRPC_ADDR: "payment-service:9091"
+      PAYMENT_TIMEOUT_SECS: "5"
     ports:
       - "8080:8080"
+      - "9090:9090"   # gRPC — for SubscribeToOrderUpdates streaming
     depends_on:
       orders-db:
         condition: service_healthy

@@ -39,7 +39,7 @@ func (uc *PaymentUseCase) Authorize(input AuthorizeInput) (*AuthorizeOutput, err
 
 	if !payment.IsWithinLimit() {
 		payment.Status = domain.StatusDeclined
-		payment.TransactionID = "" // no transaction for declined payments
+		payment.TransactionID = ""
 		if err := uc.repo.Save(payment); err != nil {
 			return nil, fmt.Errorf("failed to save declined payment: %w", err)
 		}
@@ -55,7 +55,6 @@ func (uc *PaymentUseCase) Authorize(input AuthorizeInput) (*AuthorizeOutput, err
 	return &AuthorizeOutput{Payment: payment}, nil
 }
 
-// GetByOrderID retrieves payment details for a given order.
 func (uc *PaymentUseCase) GetByOrderID(orderID string) (*domain.Payment, error) {
 	payment, err := uc.repo.FindByOrderID(orderID)
 	if err != nil {

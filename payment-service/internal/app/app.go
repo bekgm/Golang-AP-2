@@ -10,6 +10,7 @@ import (
 
 type Config struct {
 	HTTPPort   string
+	GRPCPort   string
 	DBHost     string
 	DBPort     string
 	DBUser     string

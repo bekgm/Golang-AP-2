@@ -34,7 +34,6 @@ type orderResponse struct {
 	CreatedAt  string `json:"created_at"`
 }
 
-// CreateOrder handles POST /orders
 func (h *OrderHandler) CreateOrder(c *gin.Context) {
 	var req createOrderRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -66,7 +65,6 @@ func (h *OrderHandler) CreateOrder(c *gin.Context) {
 	c.JSON(http.StatusCreated, toResponse(output.Order))
 }
 
-// GetOrder handles GET /orders/:id
 func (h *OrderHandler) GetOrder(c *gin.Context) {
 	order, err := h.uc.GetOrder(c.Param("id"))
 	if err != nil {
@@ -80,7 +78,6 @@ func (h *OrderHandler) GetOrder(c *gin.Context) {
 	c.JSON(http.StatusOK, toResponse(order))
 }
 
-// CancelOrder handles PATCH /orders/:id/cancel
 func (h *OrderHandler) CancelOrder(c *gin.Context) {
 	order, err := h.uc.CancelOrder(c.Param("id"))
 	if err != nil {
@@ -100,7 +97,7 @@ func (h *OrderHandler) CancelOrder(c *gin.Context) {
 
 func (h *OrderHandler) RegisterRoutes(r *gin.Engine) {
 	r.POST("/orders", h.CreateOrder)
-	r.GET("/orders/recent", h.GetRecentOrders) // static route must be before :id
+	r.GET("/orders/recent", h.GetRecentOrders)
 	r.GET("/orders/:id", h.GetOrder)
 	r.PATCH("/orders/:id/cancel", h.CancelOrder)
 }

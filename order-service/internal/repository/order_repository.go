@@ -84,6 +84,9 @@ func (r *PostgresOrderRepository) Update(order *domain.Order) error {
 	if rows == 0 {
 		return fmt.Errorf("order %s not found for update", order.ID)
 	}
+
+	payload := fmt.Sprintf("%s:%s", order.ID, order.Status)
+	_, _ = r.db.Exec(`SELECT pg_notify('order_status_updates', $1)`, payload)
 	return nil
 }
 
