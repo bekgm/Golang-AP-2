@@ -39,3 +39,5 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240318140521-94a12d6c2237 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+replace github.com/bekgm/ap2-generated v1.0.0 => ../generated

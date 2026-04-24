@@ -2,9 +2,10 @@ package usecase
 
 import (
 	"fmt"
-	"github.com/google/uuid"
 	"payment-service/internal/domain"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 type PaymentUseCase struct {
@@ -61,4 +62,20 @@ func (uc *PaymentUseCase) GetByOrderID(orderID string) (*domain.Payment, error) 
 		return nil, fmt.Errorf("payment not found for order %s: %w", orderID, err)
 	}
 	return payment, nil
+}
+
+type ListPaymentsInput struct {
+	MinAmount int64
+	MaxAmount int64
+
+}
+
+func (uc *PaymentUseCase) ListPayments(input ListPaymentsInput) ([]*domain.Payment, error) {
+	if input.MinAmount < 0 || input.MaxAmount < 0 {
+		return nil, fmt.Errorf("min_amount and max_amount must be non-negative")
+	}
+	if input.MinAmount > 0 && input.MaxAmount > 0 && input.MinAmount > input.MaxAmount {
+		return nil, fmt.Errorf("min_amount must be <= max_amount")
+	}
+	return uc.repo.FindByAmountRange(input.MinAmount, input.MaxAmount)
 }
