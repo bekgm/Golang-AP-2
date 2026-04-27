@@ -16,6 +16,7 @@ type Config struct {
 	DBUser     string
 	DBPassword string
 	DBName     string
+	AMQPURL    string
 }
 
 func NewPostgresDB(cfg Config) (*sql.DB, error) {

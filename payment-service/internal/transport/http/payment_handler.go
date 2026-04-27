@@ -18,8 +18,9 @@ func NewPaymentHandler(uc *usecase.PaymentUseCase) *PaymentHandler {
 }
 
 type authorizeRequest struct {
-	OrderID string `json:"order_id" binding:"required"`
-	Amount  int64  `json:"amount"   binding:"required,min=1"`
+	OrderID       string `json:"order_id" binding:"required"`
+	Amount        int64  `json:"amount"   binding:"required,min=1"`
+	CustomerEmail string `json:"customer_email"`
 }
 
 type paymentResponse struct {
@@ -39,8 +40,9 @@ func (h *PaymentHandler) Authorize(c *gin.Context) {
 	}
 
 	output, err := h.uc.Authorize(usecase.AuthorizeInput{
-		OrderID: req.OrderID,
-		Amount:  req.Amount,
+		OrderID:       req.OrderID,
+		Amount:        req.Amount,
+		CustomerEmail: req.CustomerEmail,
 	})
 	if err != nil {
 		if strings.Contains(err.Error(), "validation error") {

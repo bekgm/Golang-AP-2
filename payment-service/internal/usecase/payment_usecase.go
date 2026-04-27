@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"fmt"
+	"log"
 	"payment-service/internal/domain"
 	"time"
 
@@ -9,16 +10,18 @@ import (
 )
 
 type PaymentUseCase struct {
-	repo domain.PaymentRepository
+	repo      domain.PaymentRepository
+	publisher domain.EventPublisher
 }
 
-func NewPaymentUseCase(repo domain.PaymentRepository) *PaymentUseCase {
-	return &PaymentUseCase{repo: repo}
+func NewPaymentUseCase(repo domain.PaymentRepository, publisher domain.EventPublisher) *PaymentUseCase {
+	return &PaymentUseCase{repo: repo, publisher: publisher}
 }
 
 type AuthorizeInput struct {
-	OrderID string
-	Amount  int64
+	OrderID       string
+	Amount        int64
+	CustomerEmail string
 }
 
 type AuthorizeOutput struct {
@@ -51,6 +54,21 @@ func (uc *PaymentUseCase) Authorize(input AuthorizeInput) (*AuthorizeOutput, err
 
 	if err := uc.repo.Save(payment); err != nil {
 		return nil, fmt.Errorf("failed to save payment: %w", err)
+	}
+
+	// Publish event asynchronously after the DB transaction is committed.
+	event := domain.PaymentCompletedEvent{
+		EventID:       uuid.NewString(),
+		OrderID:       payment.OrderID,
+		PaymentID:     payment.ID,
+		Amount:        payment.Amount,
+		CustomerEmail: input.CustomerEmail,
+		Status:        payment.Status,
+		OccurredAt:    time.Now().UTC(),
+	}
+	if err := uc.publisher.PublishPaymentCompleted(event); err != nil {
+		// Log the error but do not fail the request – the payment is already persisted.
+		log.Printf("WARNING: failed to publish PaymentCompletedEvent for order %s: %v", payment.OrderID, err)
 	}
 
 	return &AuthorizeOutput{Payment: payment}, nil
