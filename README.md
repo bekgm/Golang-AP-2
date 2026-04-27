@@ -1,32 +1,10 @@
 ﻿# Order & Payment Platform — AP2 Assignment 3 (Event-Driven Architecture)
 
 > **Assignment 3** — Event-Driven Architecture with Message Queues  
-> **Student:** Taubakabyl Nurlybek  
+> **Student:** Bekzat Murat
 > **Evolution:** Assignment 2 (REST + gRPC) → Assignment 3 (REST + gRPC + RabbitMQ EDA)
 
 ---
-
-## Architecture Diagram
-
-```
-┌──────────────────────────────────────────────────────────────────────────┐
-│                          Docker Compose Network                          │
-│                                                                          │
-│  HTTP/REST          gRPC                  AMQP                           │
-│  Client ──► Order Service ──► Payment Service ──► RabbitMQ Broker        │
-│             (port 8080)       (port 8081/9091)    (port 5672)            │
-│                  │                  │                   │                │
-│             orders-db          payments-db    payment.completed queue    │
-│           (PostgreSQL)        (PostgreSQL)              │                │
-│                                                         ▼                │
-│                                               Notification Service       │
-│                                               (Consumer, no ports)       │
-│                                                         │                │
-│                                               [Notification] Sent email  │
-│                                               to user@example.com for    │
-│                                               Order #123. Amount: $9.99  │
-└──────────────────────────────────────────────────────────────────────────┘
-```
 
 ### Event Flow
 
