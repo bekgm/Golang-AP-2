@@ -4,9 +4,10 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/gin-gonic/gin"
 	"payment-service/internal/domain"
 	"payment-service/internal/usecase"
+
+	"github.com/gin-gonic/gin"
 )
 
 type PaymentHandler struct {

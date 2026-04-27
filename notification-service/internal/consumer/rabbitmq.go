@@ -12,17 +12,17 @@ import (
 )
 
 const (
-	QueueName    = "payment.completed"
-	DLXName      = "payment.dlx"
-	DLQName      = "payment.dead-letter"
-	MaxRetries   = 3
-	RetryHeader  = "x-retry-count"
+	QueueName   = "payment.completed"
+	DLXName     = "payment.dlx"
+	DLQName     = "payment.dead-letter"
+	MaxRetries  = 3
+	RetryHeader = "x-retry-count"
 )
 
 // idempotencyStore is a simple in-memory store for processed event IDs.
 type idempotencyStore struct {
-	mu      sync.Mutex
-	seen    map[string]struct{}
+	mu   sync.Mutex
+	seen map[string]struct{}
 }
 
 func newIdempotencyStore() *idempotencyStore {
@@ -210,7 +210,7 @@ func (c *RabbitMQConsumer) republishWithRetry(original amqp.Delivery, event doma
 	body, _ := json.Marshal(event)
 	headers := amqp.Table{RetryHeader: retryCount}
 	err := c.ch.Publish(
-		"",        // default exchange
+		"", // default exchange
 		QueueName,
 		false,
 		false,
