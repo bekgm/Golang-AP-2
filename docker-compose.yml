@@ -37,6 +37,23 @@ services:
       timeout: 5s
       retries: 5
 
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    ports:
+      - "5672:5672"    # AMQP
+      - "15672:15672"  # Management UI
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
   payment-service:
     build:
       context: .
@@ -50,11 +67,14 @@ services:
       DB_USER: postgres
       DB_PASSWORD: postgres
       DB_NAME: payments_db
+      AMQP_URL: "amqp://guest:guest@rabbitmq:5672/"
     ports:
       - "8081:8081"
-      - "9091:9091"   # gRPC — called by Order Service
+      - "9091:9091"
     depends_on:
       payments-db:
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy
 
   order-service:
@@ -74,13 +94,25 @@ services:
       PAYMENT_TIMEOUT_SECS: "5"
     ports:
       - "8080:8080"
-      - "9090:9090"   # gRPC — for SubscribeToOrderUpdates streaming
+      - "9090:9090"
     depends_on:
       orders-db:
         condition: service_healthy
       payment-service:
         condition: service_started
 
+  notification-service:
+    build:
+      context: .
+      dockerfile: notification-service/Dockerfile
+    container_name: notification-service
+    environment:
+      AMQP_URL: "amqp://guest:guest@rabbitmq:5672/"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
 volumes:
   orders_data:
   payments_data:
+  rabbitmq_data:

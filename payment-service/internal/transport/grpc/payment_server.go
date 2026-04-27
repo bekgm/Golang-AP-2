@@ -2,6 +2,7 @@ package grpc
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"payment-service/internal/usecase"
@@ -35,8 +36,9 @@ func (s *PaymentGRPCServer) ProcessPayment(
 	}
 
 	output, err := s.uc.Authorize(usecase.AuthorizeInput{
-		OrderID: req.GetOrderId(),
-		Amount:  req.GetAmount(),
+		OrderID:       req.GetOrderId(),
+		Amount:        req.GetAmount(),
+		CustomerEmail: fmt.Sprintf("user_%s@example.com", req.GetOrderId()),
 	})
 	if err != nil {
 		if strings.Contains(err.Error(), "validation error") {

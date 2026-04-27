@@ -1,4 +1,140 @@
-﻿# Order & Payment Platform — AP2 Assignment 2 (gRPC Migration)
+﻿# Order & Payment Platform — AP2 Assignment 3 (Event-Driven Architecture)
+
+> **Assignment 3** — Event-Driven Architecture with Message Queues  
+> **Student:** Bekzat Murat
+> **Evolution:** Assignment 2 (REST + gRPC) → Assignment 3 (REST + gRPC + RabbitMQ EDA)
+
+---
+
+### Event Flow
+
+1. A client sends `POST /payments` (HTTP) or a gRPC `ProcessPayment` call to **Payment Service**.
+2. Payment Service validates the request, persists the payment to PostgreSQL.
+3. On **success (Authorized)**, Payment Service publishes a `PaymentCompletedEvent` (JSON) to the `payment.completed` **durable queue** in RabbitMQ.
+4. **Notification Service** consumes the event, checks idempotency, logs the simulated email, and manually **ACKs** the message.
+
+---
+
+## What Changed vs Assignment 2
+
+| Layer | Assignment 2 | Assignment 3 |
+|---|---|---|
+| Order→Payment | gRPC ProcessPayment | **UNCHANGED** |
+| Payment→Broker | None | **RabbitMQ producer (amqp091-go)** |
+| Notification | None | **New Notification Service (consumer)** |
+| Graceful Shutdown | None | **os/signal + context timeout** in Payment & Notification |
+| Infrastructure | 2 DBs | **2 DBs + RabbitMQ broker** |
+| Docker services | 4 | **5 (+ notification-service)** |
+
+---
+
+## Repository Links
+
+| Repository | Purpose | Link |
+|---|---|---|
+| **Proto Repository (Repo A)** | `.proto` source files + GitHub Actions workflow | [bekgm/ap2-protos](https://github.com/bekgm/ap2-protos) |
+| **Generated Code Repository (Repo B)** | Auto-generated `.pb.go` files, imported by services | [bekgm/ap2-generated](https://github.com/bekgm/ap2-generated) |
+
+---
+
+## Idempotency Strategy
+
+Every event published by the Payment Service includes a unique `event_id` (UUID v4 generated at publish time). The Notification Service maintains an **in-memory map** (`map[string]struct{}`) protected by a mutex:
+
+1. When a message arrives, the consumer looks up `event.event_id` in the map.
+2. **If found** → the event was already processed; ACK the message and return without logging (safe deduplication).
+3. **If not found** → process the event (log the notification), then add the ID to the map, then ACK.
+
+This guarantees that even if RabbitMQ redelivers a message (e.g., after a crash before ACK), the log is only printed once per unique event.
+
+> **Trade-off:** The in-memory store is lost on service restart. For production, a persistent store (Redis `SETNX`, or a DB `processed_events` table with a UNIQUE constraint on `event_id`) would provide cross-restart idempotency.
+
+---
+
+## ACK Logic
+
+Manual acknowledgements are enabled (`auto-ack = false`). The flow:
+
+```
+Receive message
+      │
+      ▼
+Unmarshal JSON ──FAIL──► Nack(requeue=false) → message goes to DLQ
+      │
+      ▼
+Idempotency check ──DUPLICATE──► Ack (remove from queue silently)
+      │
+      ▼
+Process (log email)
+      │
+      ├─ SUCCESS ─► markProcessed(event_id) → Ack
+      │
+      └─ FAILURE (retries < 3) ─► republish with x-retry-count header → Ack original
+                 (retries >= 3) ─► Nack(requeue=false) → message goes to DLQ
+```
+
+A message is **acknowledged only after** the notification log has been successfully printed. If the service crashes mid-processing, RabbitMQ will redeliver the message to the next available consumer (at-least-once delivery).
+
+---
+
+## Reliability Guarantees
+
+| Feature | Implementation |
+|---|---|
+| **Durable queue** | `durable=true` on `payment.completed` — survives broker restart |
+| **Persistent messages** | `DeliveryMode: amqp.Persistent` — messages written to disk |
+| **Manual ACK** | `auto-ack=false`; ACK only after successful processing |
+| **QoS prefetch=1** | Consumer processes one message at a time |
+| **At-least-once delivery** | Unacknowledged messages are requeued on consumer crash |
+| **Graceful Shutdown** | `os/signal` + `context.WithTimeout` in Payment Service; `done` channel in Notification Service |
+
+---
+
+## Running the Project
+
+```bash
+docker compose up --build
+```
+
+All five services start automatically:
+- `orders-db` — PostgreSQL for orders
+- `payments-db` — PostgreSQL for payments
+- `rabbitmq` — RabbitMQ broker (Management UI at http://localhost:15672, guest/guest)
+- `payment-service` — HTTP :8081, gRPC :9091
+- `order-service` — HTTP :8080, gRPC :9090
+- `notification-service` — background consumer (no exposed ports)
+
+### Example: trigger a notification
+
+```bash
+# Create a payment via REST
+curl -X POST http://localhost:8081/payments \
+  -H "Content-Type: application/json" \
+  -d '{"order_id":"ord-001","amount":9999,"customer_email":"alice@example.com"}'
+```
+
+Check `docker compose logs notification-service` to see:
+```
+[Notification] Sent email to alice@example.com for Order #ord-001. Amount: $99.99. Status: Authorized
+```
+
+---
+
+## Clean Architecture Layers
+
+```
+cmd/service-name/main.go       ← Composition Root (manual DI, graceful shutdown)
+internal/
+  domain/     ← Entities + Port interfaces (EventPublisher interface)
+  usecase/    ← Business logic (publishes event via domain.EventPublisher)
+  messaging/  ← RabbitMQ publisher (implements domain.EventPublisher)
+  repository/ ← PostgreSQL implementations
+  transport/  ← HTTP (Gin) + gRPC handlers
+  consumer/   ← RabbitMQ consumer (notification-service only)
+```
+
+The messaging logic is **hidden behind the `domain.EventPublisher` interface**. The use case depends only on the interface, not on RabbitMQ directly — allowing easy substitution (NATS, Kafka, in-memory stub for tests).
+
 
 > **Assignment 2** — gRPC Migration & Contract-First Development  
 > **Student:** Bekzat
