@@ -196,6 +196,11 @@ func (c *RabbitMQConsumer) handleMessage(msg amqp.Delivery) {
 }
 
 func (c *RabbitMQConsumer) process(event domain.PaymentCompletedEvent) error {
+	// Force a processing error for large amounts to trigger retries/DLQ
+	if event.Amount > 5000 {
+		return fmt.Errorf("simulated processing error: amount %d too large", event.Amount)
+	}
+
 	log.Printf(
 		"[Notification] Sent email to %s for Order #%s. Amount: $%.2f. Status: %s",
 		event.CustomerEmail,
