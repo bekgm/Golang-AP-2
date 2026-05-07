@@ -6,12 +6,17 @@
 
 ---
 
+## Architecture
+
+![alt text](image-1.png)
+
 ### Event Flow
 
 1. A client sends `POST /payments` (HTTP) or a gRPC `ProcessPayment` call to **Payment Service**.
 2. Payment Service validates the request, persists the payment to PostgreSQL.
 3. On **success (Authorized)**, Payment Service publishes a `PaymentCompletedEvent` (JSON) to the `payment.completed` **durable queue** in RabbitMQ.
 4. **Notification Service** consumes the event, checks idempotency, logs the simulated email, and manually **ACKs** the message.
+5. **Dead Letter Queue (DLQ):** If processing fails after 3 retries, the message is moved to `payment.dead-letter` for inspection.
 
 ---
 

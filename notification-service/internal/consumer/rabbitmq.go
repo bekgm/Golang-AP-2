@@ -12,17 +12,17 @@ import (
 )
 
 const (
-	QueueName   = "payment.completed"
-	DLXName     = "payment.dlx"
-	DLQName     = "payment.dead-letter"
-	MaxRetries  = 3
-	RetryHeader = "x-retry-count"
+	QueueName    = "payment.completed"
+	DLXName      = "payment.dlx"
+	DLQName      = "payment.dead-letter"
+	MaxRetries   = 3
+	RetryHeader  = "x-retry-count"
 )
 
 // idempotencyStore is a simple in-memory store for processed event IDs.
 type idempotencyStore struct {
-	mu   sync.Mutex
-	seen map[string]struct{}
+	mu      sync.Mutex
+	seen    map[string]struct{}
 }
 
 func newIdempotencyStore() *idempotencyStore {
@@ -196,11 +196,6 @@ func (c *RabbitMQConsumer) handleMessage(msg amqp.Delivery) {
 }
 
 func (c *RabbitMQConsumer) process(event domain.PaymentCompletedEvent) error {
-	// Force a processing error for large amounts to trigger retries/DLQ
-	if event.Amount > 5000 {
-		return fmt.Errorf("simulated processing error: amount %d too large", event.Amount)
-	}
-
 	log.Printf(
 		"[Notification] Sent email to %s for Order #%s. Amount: $%.2f. Status: %s",
 		event.CustomerEmail,
@@ -215,7 +210,7 @@ func (c *RabbitMQConsumer) republishWithRetry(original amqp.Delivery, event doma
 	body, _ := json.Marshal(event)
 	headers := amqp.Table{RetryHeader: retryCount}
 	err := c.ch.Publish(
-		"", // default exchange
+		"",        // default exchange
 		QueueName,
 		false,
 		false,
