@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"fmt"
+	"log"
 	"time"
 
 	"order-service/internal/domain"
@@ -12,12 +13,14 @@ import (
 type OrderUseCase struct {
 	repo          domain.OrderRepository
 	paymentClient domain.PaymentClient
+	cache         domain.OrderCache
 }
 
-func NewOrderUseCase(repo domain.OrderRepository, paymentClient domain.PaymentClient) *OrderUseCase {
+func NewOrderUseCase(repo domain.OrderRepository, paymentClient domain.PaymentClient, cache domain.OrderCache) *OrderUseCase {
 	return &OrderUseCase{
 		repo:          repo,
 		paymentClient: paymentClient,
+		cache:         cache,
 	}
 }
 
@@ -82,13 +85,29 @@ func (uc *OrderUseCase) CreateOrder(input CreateOrderInput) (*CreateOrderOutput,
 		return nil, fmt.Errorf("failed to update order status: %w", err)
 	}
 
+	// Invalidate cache after status change so stale data is never served.
+	if err := uc.cache.Delete(order.ID); err != nil {
+		log.Printf("[OrderUseCase] cache invalidation failed for %s: %v", order.ID, err)
+	}
+
 	return &CreateOrderOutput{Order: order}, nil
 }
 
 func (uc *OrderUseCase) GetOrder(id string) (*domain.Order, error) {
+	// Cache-aside: check Redis first.
+	if cached, err := uc.cache.Get(id); err == nil {
+		log.Printf("[OrderUseCase] cache HIT for order %s", id)
+		return cached, nil
+	}
+
 	order, err := uc.repo.FindByID(id)
 	if err != nil {
 		return nil, fmt.Errorf("order not found: %w", err)
+	}
+
+	// Populate the cache for subsequent reads.
+	if err := uc.cache.Set(order); err != nil {
+		log.Printf("[OrderUseCase] cache set failed for %s: %v", id, err)
 	}
 	return order, nil
 }
@@ -106,6 +125,11 @@ func (uc *OrderUseCase) CancelOrder(id string) (*domain.Order, error) {
 	order.Status = domain.StatusCancelled
 	if err := uc.repo.Update(order); err != nil {
 		return nil, fmt.Errorf("failed to cancel order: %w", err)
+	}
+
+	// Invalidate cache so the cancelled status is immediately visible.
+	if err := uc.cache.Delete(order.ID); err != nil {
+		log.Printf("[OrderUseCase] cache invalidation failed for %s: %v", order.ID, err)
 	}
 
 	return order, nil

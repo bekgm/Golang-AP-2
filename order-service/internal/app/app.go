@@ -18,6 +18,10 @@ type Config struct {
 	DBName                 string
 	PaymentServiceGRPCAddr string
 	PaymentTimeoutSecs     int
+	RedisAddr              string
+	CacheTTLSecs           int
+	RateLimitMax           int
+	RateLimitWindowSecs    int
 }
 
 func BuildDSN(cfg Config) string {

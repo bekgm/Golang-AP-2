@@ -3,21 +3,51 @@ package main
 import (
 	"log"
 	"notification-service/internal/consumer"
+	"notification-service/internal/domain"
+	"notification-service/internal/provider"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
+
+	"github.com/redis/go-redis/v9"
 )
 
 func main() {
 	amqpURL := getEnv("AMQP_URL", "amqp://guest:guest@localhost:5672/")
+	redisAddr := getEnv("REDIS_ADDR", "localhost:6379")
+	maxRetries := getEnvInt("MAX_RETRIES", 3)
 
+	// --- Redis client ---
+	redisClient := redis.NewClient(&redis.Options{Addr: redisAddr})
+	log.Printf("[Notification] Connected to Redis at %s", redisAddr)
+
+	// --- Email provider (selected via PROVIDER_MODE env var) ---
+	var sender domain.EmailSender
+	mode := getEnv("PROVIDER_MODE", "SIMULATED")
+	switch mode {
+	case "REAL":
+		sender = provider.NewSMTPEmailSender(
+			getEnv("SMTP_HOST", "smtp.example.com"),
+			getEnv("SMTP_PORT", "587"),
+			getEnv("SMTP_USER", ""),
+			getEnv("SMTP_PASSWORD", ""),
+			getEnv("SMTP_FROM", "noreply@example.com"),
+		)
+		log.Println("[Notification] Using REAL SMTP email provider")
+	default:
+		// SIMULATED: 30% failure rate, 200ms simulated latency
+		sender = provider.NewSimulatedEmailSender(0.30, 200*time.Millisecond)
+		log.Println("[Notification] Using SIMULATED email provider (30% failure rate)")
+	}
+
+	// --- RabbitMQ consumer ---
 	var c *consumer.RabbitMQConsumer
 	var err error
 
-	// Retry connecting to RabbitMQ – it may not be ready yet on startup.
 	for attempt := 1; attempt <= 10; attempt++ {
-		c, err = consumer.New(amqpURL)
+		c, err = consumer.New(amqpURL, sender, redisClient, maxRetries)
 		if err == nil {
 			break
 		}
@@ -49,6 +79,15 @@ func main() {
 func getEnv(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
+	}
+	return fallback
+}
+
+func getEnvInt(key string, fallback int) int {
+	if v := os.Getenv(key); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil {
+			return parsed
+		}
 	}
 	return fallback
 }
