@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"notification-service/internal/domain"
+	"os"
 	"sync"
 	"time"
 
@@ -26,8 +27,7 @@ const (
 	DLQName = "payment.dead-letter"
 
 	// Constants
-	MaxRetries  = 3
-	RetryHeader = "x-retry-count"
+	MaxRetries = 3
 )
 
 // idempotencyStore is a simple in-memory store for processed event IDs.
@@ -242,27 +242,19 @@ func (c *RabbitMQConsumer) handleMessage(msg amqp.Delivery) {
 		return
 	}
 
-	// --- Get retry count from headers ---
-	retries := int32(0)
-	if v, ok := msg.Headers[RetryHeader]; ok {
-		if r, ok := v.(int32); ok {
-			retries = r
-		}
-	}
-
 	// --- Try to process the message ---
 	if err := c.process(event); err != nil {
-		if retries >= MaxRetries-1 {
+		if event.RetryCount >= MaxRetries-1 {
 			// Max retries reached - move to DLQ
 			log.Printf("[Notification] Max retries (%d) reached for event %s (Order #%s). Moving to DLQ.",
 				MaxRetries, event.EventID, event.OrderID)
 			msg.Nack(false, false) // nack without requeue → goes to DLX/DLQ
 		} else {
 			// Send to retry queue with incremented retry count
-			newRetries := retries + 1
+			event.RetryCount++
 			log.Printf("[Notification] Processing failed for event %s (attempt %d/%d). Sending to retry queue.",
-				event.EventID, newRetries, MaxRetries)
-			c.sendToRetryQueue(event, newRetries)
+				event.EventID, event.RetryCount, MaxRetries)
+			c.sendToRetryQueue(event)
 			msg.Ack(false) // ack current message to remove from main queue
 		}
 		return
@@ -280,6 +272,12 @@ func (c *RabbitMQConsumer) handleMessage(msg amqp.Delivery) {
 }
 
 func (c *RabbitMQConsumer) process(event domain.PaymentCompletedEvent) error {
+	// For testing DLQ: set SIMULATE_FAILURE=true to test retry mechanism
+	if os.Getenv("SIMULATE_FAILURE") == "true" {
+		log.Printf("[Notification] [TEST MODE] Simulating failure for event %s", event.EventID)
+		return fmt.Errorf("simulated processing error for testing DLQ")
+	}
+
 	log.Printf(
 		"[Notification] Sent email to %s for Order #%s. Amount: $%.2f. Status: %s",
 		event.CustomerEmail,
@@ -290,14 +288,13 @@ func (c *RabbitMQConsumer) process(event domain.PaymentCompletedEvent) error {
 	return nil
 }
 
-func (c *RabbitMQConsumer) sendToRetryQueue(event domain.PaymentCompletedEvent, retryCount int32) {
+func (c *RabbitMQConsumer) sendToRetryQueue(event domain.PaymentCompletedEvent) {
 	body, err := json.Marshal(event)
 	if err != nil {
 		log.Printf("[Notification] Failed to marshal event %s for retry: %v", event.EventID, err)
 		return
 	}
 
-	headers := amqp.Table{RetryHeader: retryCount}
 	err = c.ch.Publish(
 		RetryExchange,
 		RetryQueue,
@@ -307,7 +304,6 @@ func (c *RabbitMQConsumer) sendToRetryQueue(event domain.PaymentCompletedEvent, 
 			ContentType:  "application/json",
 			Body:         body,
 			DeliveryMode: amqp.Persistent,
-			Headers:      headers,
 		},
 	)
 	if err != nil {

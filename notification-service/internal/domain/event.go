@@ -12,4 +12,5 @@ type PaymentCompletedEvent struct {
 	CustomerEmail string    `json:"customer_email"`
 	Status        string    `json:"status"`
 	OccurredAt    time.Time `json:"occurred_at"`
+	RetryCount    int32     `json:"retry_count,omitempty"` // Number of retry attempts
 }
