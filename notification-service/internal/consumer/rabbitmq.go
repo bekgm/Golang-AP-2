@@ -12,17 +12,28 @@ import (
 )
 
 const (
-	QueueName    = "payment.completed"
-	DLXName      = "payment.dlx"
-	DLQName      = "payment.dead-letter"
-	MaxRetries   = 3
-	RetryHeader  = "x-retry-count"
+	// Main queue
+	QueueName = "payment.completed"
+	Exchange  = "payment.exchange"
+
+	// Retry mechanism
+	RetryExchange = "payment.retry.exchange"
+	RetryQueue    = "payment.retry.queue"
+	RetryDuration = 5 * time.Second // Wait 5 seconds between retries
+
+	// Dead Letter
+	DLXName = "payment.dlx"
+	DLQName = "payment.dead-letter"
+
+	// Constants
+	MaxRetries  = 3
+	RetryHeader = "x-retry-count"
 )
 
 // idempotencyStore is a simple in-memory store for processed event IDs.
 type idempotencyStore struct {
-	mu      sync.Mutex
-	seen    map[string]struct{}
+	mu   sync.Mutex
+	seen map[string]struct{}
 }
 
 func newIdempotencyStore() *idempotencyStore {
@@ -70,7 +81,7 @@ func New(amqpURL string) (*RabbitMQConsumer, error) {
 		return nil, fmt.Errorf("rabbitmq: set qos: %w", err)
 	}
 
-	// Declare the Dead-Letter Exchange.
+	// 1. Declare the Dead-Letter Exchange (fanout)
 	if err := ch.ExchangeDeclare(
 		DLXName, "fanout", true, false, false, false, nil,
 	); err != nil {
@@ -79,7 +90,7 @@ func New(amqpURL string) (*RabbitMQConsumer, error) {
 		return nil, fmt.Errorf("rabbitmq: declare DLX: %w", err)
 	}
 
-	// Declare the Dead-Letter Queue and bind it to the DLX.
+	// 2. Declare the Dead-Letter Queue and bind it to the DLX
 	dlq, err := ch.QueueDeclare(DLQName, true, false, false, false, nil)
 	if err != nil {
 		ch.Close()
@@ -92,10 +103,19 @@ func New(amqpURL string) (*RabbitMQConsumer, error) {
 		return nil, fmt.Errorf("rabbitmq: bind DLQ: %w", err)
 	}
 
-	// Declare the main durable queue with DLX configured.
+	// 3. Declare main exchange
+	if err := ch.ExchangeDeclare(
+		Exchange, "direct", true, false, false, false, nil,
+	); err != nil {
+		ch.Close()
+		conn.Close()
+		return nil, fmt.Errorf("rabbitmq: declare exchange: %w", err)
+	}
+
+	// 4. Declare the main queue with DLX configured
 	_, err = ch.QueueDeclare(
 		QueueName,
-		true,  // durable – survives broker restart
+		true,  // durable
 		false, // auto-delete
 		false, // exclusive
 		false, // no-wait
@@ -106,7 +126,65 @@ func New(amqpURL string) (*RabbitMQConsumer, error) {
 	if err != nil {
 		ch.Close()
 		conn.Close()
-		return nil, fmt.Errorf("rabbitmq: declare queue: %w", err)
+		return nil, fmt.Errorf("rabbitmq: declare main queue: %w", err)
+	}
+
+	// 5. Bind main queue to exchange
+	if err := ch.QueueBind(QueueName, QueueName, Exchange, false, nil); err != nil {
+		ch.Close()
+		conn.Close()
+		return nil, fmt.Errorf("rabbitmq: bind main queue: %w", err)
+	}
+
+	// 6. Declare retry exchange
+	if err := ch.ExchangeDeclare(
+		RetryExchange, "direct", true, false, false, false, nil,
+	); err != nil {
+		ch.Close()
+		conn.Close()
+		return nil, fmt.Errorf("rabbitmq: declare retry exchange: %w", err)
+	}
+
+	// 7. Declare retry queue with TTL and DLX (message expired goes back to main queue via retry DLX)
+	retryDLX := "payment.retry.dlx"
+	if err := ch.ExchangeDeclare(
+		retryDLX, "direct", true, false, false, false, nil,
+	); err != nil {
+		ch.Close()
+		conn.Close()
+		return nil, fmt.Errorf("rabbitmq: declare retry DLX: %w", err)
+	}
+
+	_, err = ch.QueueDeclare(
+		RetryQueue,
+		true,  // durable
+		false, // auto-delete
+		false, // exclusive
+		false, // no-wait
+		amqp.Table{
+			"x-message-ttl":             int64(RetryDuration.Milliseconds()),
+			"x-dead-letter-exchange":    retryDLX,
+			"x-dead-letter-routing-key": QueueName,
+		},
+	)
+	if err != nil {
+		ch.Close()
+		conn.Close()
+		return nil, fmt.Errorf("rabbitmq: declare retry queue: %w", err)
+	}
+
+	// 8. Bind retry queue to retry exchange
+	if err := ch.QueueBind(RetryQueue, RetryQueue, RetryExchange, false, nil); err != nil {
+		ch.Close()
+		conn.Close()
+		return nil, fmt.Errorf("rabbitmq: bind retry queue: %w", err)
+	}
+
+	// 9. Bind retry DLX to main queue (so messages re-enter main queue)
+	if err := ch.QueueBind(QueueName, QueueName, retryDLX, false, nil); err != nil {
+		ch.Close()
+		conn.Close()
+		return nil, fmt.Errorf("rabbitmq: bind retry dlx to main queue: %w", err)
 	}
 
 	return &RabbitMQConsumer{
@@ -153,18 +231,18 @@ func (c *RabbitMQConsumer) handleMessage(msg amqp.Delivery) {
 	var event domain.PaymentCompletedEvent
 	if err := json.Unmarshal(msg.Body, &event); err != nil {
 		log.Printf("[Notification] Failed to unmarshal message: %v. Moving to DLQ.", err)
-		msg.Nack(false, false) // do not requeue – malformed message
+		msg.Nack(false, false) // do not requeue – malformed message goes to DLX
 		return
 	}
 
 	// --- Idempotency check ---
 	if c.idempStore.alreadyProcessed(event.EventID) {
 		log.Printf("[Notification] Duplicate event %s detected – skipping.", event.EventID)
-		msg.Ack(false) // ack so it is removed from queue
+		msg.Ack(false)
 		return
 	}
 
-	// --- Retry / DLQ logic ---
+	// --- Get retry count from headers ---
 	retries := int32(0)
 	if v, ok := msg.Headers[RetryHeader]; ok {
 		if r, ok := v.(int32); ok {
@@ -172,16 +250,20 @@ func (c *RabbitMQConsumer) handleMessage(msg amqp.Delivery) {
 		}
 	}
 
+	// --- Try to process the message ---
 	if err := c.process(event); err != nil {
 		if retries >= MaxRetries-1 {
-			log.Printf("[Notification] Max retries (%d) reached for event %s. Sending to DLQ.", MaxRetries, event.EventID)
+			// Max retries reached - move to DLQ
+			log.Printf("[Notification] Max retries (%d) reached for event %s (Order #%s). Moving to DLQ.",
+				MaxRetries, event.EventID, event.OrderID)
 			msg.Nack(false, false) // nack without requeue → goes to DLX/DLQ
 		} else {
-			log.Printf("[Notification] Processing failed for event %s (attempt %d). Requeueing.", event.EventID, retries+1)
-			time.Sleep(500 * time.Millisecond)
-			// Republish with incremented retry count so we can track attempts.
-			c.republishWithRetry(msg, event, retries+1)
-			msg.Ack(false)
+			// Send to retry queue with incremented retry count
+			newRetries := retries + 1
+			log.Printf("[Notification] Processing failed for event %s (attempt %d/%d). Sending to retry queue.",
+				event.EventID, newRetries, MaxRetries)
+			c.sendToRetryQueue(event, newRetries)
+			msg.Ack(false) // ack current message to remove from main queue
 		}
 		return
 	}
@@ -192,6 +274,8 @@ func (c *RabbitMQConsumer) handleMessage(msg amqp.Delivery) {
 	// --- Manual ACK: only after successful processing ---
 	if err := msg.Ack(false); err != nil {
 		log.Printf("[Notification] Failed to ack message %s: %v", event.EventID, err)
+	} else {
+		log.Printf("[Notification] Successfully processed event %s for Order #%s", event.EventID, event.OrderID)
 	}
 }
 
@@ -206,14 +290,19 @@ func (c *RabbitMQConsumer) process(event domain.PaymentCompletedEvent) error {
 	return nil
 }
 
-func (c *RabbitMQConsumer) republishWithRetry(original amqp.Delivery, event domain.PaymentCompletedEvent, retryCount int32) {
-	body, _ := json.Marshal(event)
+func (c *RabbitMQConsumer) sendToRetryQueue(event domain.PaymentCompletedEvent, retryCount int32) {
+	body, err := json.Marshal(event)
+	if err != nil {
+		log.Printf("[Notification] Failed to marshal event %s for retry: %v", event.EventID, err)
+		return
+	}
+
 	headers := amqp.Table{RetryHeader: retryCount}
-	err := c.ch.Publish(
-		"",        // default exchange
-		QueueName,
-		false,
-		false,
+	err = c.ch.Publish(
+		RetryExchange,
+		RetryQueue,
+		false, // mandatory
+		false, // immediate
 		amqp.Publishing{
 			ContentType:  "application/json",
 			Body:         body,
@@ -222,7 +311,7 @@ func (c *RabbitMQConsumer) republishWithRetry(original amqp.Delivery, event doma
 		},
 	)
 	if err != nil {
-		log.Printf("[Notification] Failed to republish event %s for retry: %v", event.EventID, err)
+		log.Printf("[Notification] Failed to send event %s to retry queue: %v", event.EventID, err)
 	}
 }
 
