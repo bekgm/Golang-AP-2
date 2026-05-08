@@ -85,7 +85,6 @@ func (uc *PaymentUseCase) GetByOrderID(orderID string) (*domain.Payment, error) 
 type ListPaymentsInput struct {
 	MinAmount int64
 	MaxAmount int64
-
 }
 
 func (uc *PaymentUseCase) ListPayments(input ListPaymentsInput) ([]*domain.Payment, error) {

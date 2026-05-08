@@ -1,28 +1,165 @@
-﻿# Order & Payment Platform — AP2 Assignment 3 (Event-Driven Architecture)
+﻿# Order & Payment Platform — AP2 Assignment 4 (Performance Optimization & External Integrations)
 
-> **Assignment 3** — Event-Driven Architecture with Message Queues  
-> **Student:** Bekzat Murat
-> **Evolution:** Assignment 2 (REST + gRPC) → Assignment 3 (REST + gRPC + RabbitMQ EDA)
-
----
-
-### Event Flow
-
-1. A client sends `POST /payments` (HTTP) or a gRPC `ProcessPayment` call to **Payment Service**.
-2. Payment Service validates the request, persists the payment to PostgreSQL.
-3. On **success (Authorized)**, Payment Service publishes a `PaymentCompletedEvent` (JSON) to the `payment.completed` **durable queue** in RabbitMQ.
-4. **Notification Service** consumes the event, checks idempotency, logs the simulated email, and manually **ACKs** the message.
+> **Assignment 4** — Caching, Background Jobs & External Integrations  
+> **Student:** Bekzat Murat  
+> **Evolution:** Assignment 3 (EDA) → Assignment 4 (Redis Caching + Reliable Background Worker)
 
 ---
 
-## What Changed vs Assignment 2
+## Architecture
 
-| Layer | Assignment 2 | Assignment 3 |
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│                            CLIENT (HTTP)                                  │
+└────────────────────────────┬─────────────────────────────────────────────┘
+                             │ GET /orders/:id  POST /orders  DELETE /orders/:id
+                             ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│                         ORDER SERVICE                                     │
+│                                                                           │
+│  Rate Limiter Middleware (Redis — 10 req/min per IP)  ← BONUS             │
+│                                                                           │
+│  ┌─────────────────────────────────────────────────────────────────────┐ │
+│  │  OrderUseCase                                                        │ │
+│  │  ┌─────────────────────────────────────────────────────────────┐   │ │
+│  │  │  Cache-Aside Pattern (domain.OrderCache interface)           │   │ │
+│  │  │                                                              │   │ │
+│  │  │  GET:    Redis HIT? → return cached order                    │   │ │
+│  │  │          Redis MISS? → DB query → SET cache (TTL 5min)       │   │ │
+│  │  │                                                              │   │ │
+│  │  │  UPDATE / CANCEL:  DB update → DEL cache key (invalidation)  │   │ │
+│  │  └─────────────────────────────────────────────────────────────┘   │ │
+│  └─────────────────────────────────────────────────────────────────────┘ │
+│         │ gRPC                          │ SQL                             │
+│         ▼                              ▼                                  │
+│  Payment Service                   PostgreSQL (orders_db)                 │
+└──────────────────────────────────────────────────────────────────────────┘
+                                          │ Publishes PaymentCompletedEvent
+                                          ▼
+                                    RabbitMQ
+                               (payment.completed queue)
+                                          │
+                                          ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│                      NOTIFICATION SERVICE (Background Worker)             │
+│                                                                           │
+│  1. Consume message from queue                                            │
+│  2. Redis SETNX idempotency check (key: notification:processed:<eventID>)│
+│     → Already processed? ACK & skip                                       │
+│  3. sendWithBackoff(event) — exponential backoff: 2s → 4s → 8s           │
+│     ┌────────────────────────────────────────────────────────────────┐   │
+│     │  domain.EmailSender interface                                  │   │
+│     │  ┌──────────────────────┐  ┌──────────────────────────────┐  │   │
+│     │  │ SimulatedEmailSender │  │ SMTPEmailSender (REAL mode)  │  │   │
+│     │  │ (30% failure rate,   │  │ net/smtp standard library    │  │   │
+│     │  │  200ms latency)      │  │                              │  │   │
+│     │  └──────────────────────┘  └──────────────────────────────┘  │   │
+│     │  Selected via PROVIDER_MODE=SIMULATED|REAL env var            │   │
+│     └────────────────────────────────────────────────────────────────┘   │
+│  4. Success → Redis SET "done" → ACK message                              │
+│  5. All retries exhausted → Clear idempotency key → NACK → DLQ           │
+└──────────────────────────────────────────────────────────────────────────┘
+
+Shared Infrastructure
+  Redis 7 ── order cache, rate limit counters, notification idempotency
+  RabbitMQ 3.13 ── async messaging + dead-letter queue
+  PostgreSQL 16 ── orders_db, payments_db
+```
+
+---
+
+## What Changed vs Assignment 3
+
+| Feature | Assignment 3 | Assignment 4 |
 |---|---|---|
-| Order→Payment | gRPC ProcessPayment | **UNCHANGED** |
-| Payment→Broker | None | **RabbitMQ producer (amqp091-go)** |
-| Notification | None | **New Notification Service (consumer)** |
-| Graceful Shutdown | None | **os/signal + context timeout** in Payment & Notification |
+| Order reads | Always hit PostgreSQL | **Cache-aside with Redis (TTL 5 min)** |
+| Cache invalidation | N/A | **DEL key on every order mutation** |
+| Notification idempotency | In-memory `sync.Map` | **Redis SETNX (survives restarts)** |
+| Retry logic | RabbitMQ TTL queue | **In-process exponential backoff (2s→4s→8s)** |
+| Email provider | `log.Printf` mock | **`domain.EmailSender` interface + Simulated/SMTP adapters** |
+| Provider selection | Hardcoded | **`PROVIDER_MODE=SIMULATED\|REAL` env var** |
+| Rate limiting | None | **Redis counter middleware — 10 req/min per IP (bonus)** |
+| Infrastructure | Postgres + RabbitMQ | **+ Redis container in docker-compose** |
+
+---
+
+## Cache-Aside Pattern (Invalidation Strategy)
+
+The Order Service uses the **cache-aside** pattern:
+
+- **Read path** (`GET /orders/:id`):
+  1. Check Redis for key `order:<id>`.
+  2. **HIT** → return the cached `Order` immediately (no DB query).
+  3. **MISS** → query PostgreSQL, then `SET order:<id>` with `CACHE_TTL_SECS` (default **300 s**).
+- **Write path** (`CreateOrder`, `CancelOrder`):
+  - After every successful DB mutation, `DEL order:<id>` from Redis.
+  - This **atomic invalidation** guarantees the next read always fetches fresh data.
+- The TTL acts as a safety net: even if a bug prevents explicit invalidation, stale data expires within 5 minutes.
+
+---
+
+## Retry & Idempotency Logic (Notification Worker)
+
+### Exponential Backoff
+The worker retries failed deliveries in-process without re-queuing the message:
+
+```
+attempt 1 → fail → sleep 2s
+attempt 2 → fail → sleep 4s
+attempt 3 → fail → NACK → DLQ
+```
+
+The base delay doubles each attempt (`backoff *= 2`). `MAX_RETRIES` is configurable via env var.
+
+### Redis Idempotency (SETNX)
+Before calling `EmailSender.Send()`, the worker calls `SETNX notification:processed:<eventID> "processing" EX 86400`.
+
+- `true` returned → first time seeing this event, proceed.
+- `false` returned → duplicate (from re-delivery), ACK and skip.
+
+On success the value is updated to `"done"`. On total failure (all retries exhausted) the key is deleted so future re-delivery can be retried.
+
+---
+
+## Environment Variables
+
+| Variable | Service | Default | Description |
+|---|---|---|---|
+| `REDIS_ADDR` | order, notification | `localhost:6379` | Redis address |
+| `CACHE_TTL_SECS` | order | `300` | Order cache TTL in seconds |
+| `RATE_LIMIT_MAX` | order | `10` | Max requests per window per IP |
+| `RATE_LIMIT_WINDOW_SECS` | order | `60` | Rate limit window in seconds |
+| `PROVIDER_MODE` | notification | `SIMULATED` | `SIMULATED` or `REAL` |
+| `MAX_RETRIES` | notification | `3` | Max email delivery attempts |
+| `SMTP_HOST` | notification | — | SMTP server host (REAL mode) |
+| `SMTP_PORT` | notification | `587` | SMTP server port (REAL mode) |
+| `SMTP_USER` | notification | — | SMTP username (REAL mode) |
+| `SMTP_PASSWORD` | notification | — | SMTP password (REAL mode) |
+| `SMTP_FROM` | notification | — | Sender address (REAL mode) |
+
+---
+
+## Running the Full Stack
+
+```bash
+docker compose up --build
+```
+
+Services:
+- Order Service HTTP: http://localhost:8080
+- Payment Service HTTP: http://localhost:8081
+- RabbitMQ Management: http://localhost:15672 (guest/guest)
+
+---
+
+## Bonus: Redis Rate Limiter
+
+A Gin middleware (`transport/http/middleware.RateLimiter`) wraps all Order Service routes.
+It increments a Redis counter keyed by client IP on every request and returns
+**HTTP 429 Too Many Requests** when the count exceeds `RATE_LIMIT_MAX` within the window.
+The counter expires automatically after `RATE_LIMIT_WINDOW_SECS` seconds.
+Response headers `X-RateLimit-Limit`, `X-RateLimit-Remaining`, and `Retry-After` are included.
+
 | Infrastructure | 2 DBs | **2 DBs + RabbitMQ broker** |
 | Docker services | 4 | **5 (+ notification-service)** |
 
