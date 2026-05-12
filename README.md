@@ -8,63 +8,7 @@
 
 ## Architecture
 
-```
-┌──────────────────────────────────────────────────────────────────────────┐
-│                            CLIENT (HTTP)                                  │
-└────────────────────────────┬─────────────────────────────────────────────┘
-                             │ GET /orders/:id  POST /orders  DELETE /orders/:id
-                             ▼
-┌──────────────────────────────────────────────────────────────────────────┐
-│                         ORDER SERVICE                                     │
-│                                                                           │
-│  Rate Limiter Middleware (Redis — 10 req/min per IP)  ← BONUS             │
-│                                                                           │
-│  ┌─────────────────────────────────────────────────────────────────────┐ │
-│  │  OrderUseCase                                                        │ │
-│  │  ┌─────────────────────────────────────────────────────────────┐   │ │
-│  │  │  Cache-Aside Pattern (domain.OrderCache interface)           │   │ │
-│  │  │                                                              │   │ │
-│  │  │  GET:    Redis HIT? → return cached order                    │   │ │
-│  │  │          Redis MISS? → DB query → SET cache (TTL 5min)       │   │ │
-│  │  │                                                              │   │ │
-│  │  │  UPDATE / CANCEL:  DB update → DEL cache key (invalidation)  │   │ │
-│  │  └─────────────────────────────────────────────────────────────┘   │ │
-│  └─────────────────────────────────────────────────────────────────────┘ │
-│         │ gRPC                          │ SQL                             │
-│         ▼                              ▼                                  │
-│  Payment Service                   PostgreSQL (orders_db)                 │
-└──────────────────────────────────────────────────────────────────────────┘
-                                          │ Publishes PaymentCompletedEvent
-                                          ▼
-                                    RabbitMQ
-                               (payment.completed queue)
-                                          │
-                                          ▼
-┌──────────────────────────────────────────────────────────────────────────┐
-│                      NOTIFICATION SERVICE (Background Worker)             │
-│                                                                           │
-│  1. Consume message from queue                                            │
-│  2. Redis SETNX idempotency check (key: notification:processed:<eventID>)│
-│     → Already processed? ACK & skip                                       │
-│  3. sendWithBackoff(event) — exponential backoff: 2s → 4s → 8s           │
-│     ┌────────────────────────────────────────────────────────────────┐   │
-│     │  domain.EmailSender interface                                  │   │
-│     │  ┌──────────────────────┐  ┌──────────────────────────────┐  │   │
-│     │  │ SimulatedEmailSender │  │ SMTPEmailSender (REAL mode)  │  │   │
-│     │  │ (30% failure rate,   │  │ net/smtp standard library    │  │   │
-│     │  │  200ms latency)      │  │                              │  │   │
-│     │  └──────────────────────┘  └──────────────────────────────┘  │   │
-│     │  Selected via PROVIDER_MODE=SIMULATED|REAL env var            │   │
-│     └────────────────────────────────────────────────────────────────┘   │
-│  4. Success → Redis SET "done" → ACK message                              │
-│  5. All retries exhausted → Clear idempotency key → NACK → DLQ           │
-└──────────────────────────────────────────────────────────────────────────┘
-
-Shared Infrastructure
-  Redis 7 ── order cache, rate limit counters, notification idempotency
-  RabbitMQ 3.13 ── async messaging + dead-letter queue
-  PostgreSQL 16 ── orders_db, payments_db
-```
+![alt text](image.png)
 
 ---
 
