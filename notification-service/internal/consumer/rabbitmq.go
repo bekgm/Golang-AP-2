@@ -206,7 +206,16 @@ func (c *RabbitMQConsumer) sendWithBackoff(event domain.PaymentCompletedEvent) e
 
 // Close gracefully shuts down the consumer.
 func (c *RabbitMQConsumer) Close() {
+	defer func() {
+		if r := recover(); r != nil {
+			// Ignore: channel already closed
+		}
+	}()
 	close(c.done)
-	c.ch.Close()
-	c.conn.Close()
+	if c.ch != nil {
+		c.ch.Close()
+	}
+	if c.conn != nil {
+		c.conn.Close()
+	}
 }
