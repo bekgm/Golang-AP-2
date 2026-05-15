@@ -29,7 +29,7 @@ const (
 // notification delivery to the injected EmailSender adapter.
 type RabbitMQConsumer struct {
 	conn        *amqp.Connection
-	ch          *amqp.Channel
+	channels    []*amqp.Channel
 	sender      domain.EmailSender
 	redisClient *redis.Client
 	maxRetries  int
@@ -44,66 +44,87 @@ func New(amqpURL string, sender domain.EmailSender, redisClient *redis.Client, m
 		return nil, fmt.Errorf("rabbitmq: dial: %w", err)
 	}
 
-	ch, err := conn.Channel()
+	// Use a dedicated channel for topology declarations.
+	setupCh, err := conn.Channel()
 	if err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("rabbitmq: open channel: %w", err)
 	}
 
-	// Process one message at a time for reliability.
-	if err := ch.Qos(1, 0, false); err != nil {
-		ch.Close()
-		conn.Close()
-		return nil, fmt.Errorf("rabbitmq: set qos: %w", err)
-	}
-
 	// 1. Dead-Letter Exchange (fanout)
-	if err := ch.ExchangeDeclare(DLXName, "fanout", true, false, false, false, nil); err != nil {
-		ch.Close()
+	if err := setupCh.ExchangeDeclare(DLXName, "fanout", true, false, false, false, nil); err != nil {
+		setupCh.Close()
 		conn.Close()
 		return nil, fmt.Errorf("rabbitmq: declare DLX: %w", err)
 	}
 
 	// 2. Dead-Letter Queue
-	dlq, err := ch.QueueDeclare(DLQName, true, false, false, false, nil)
+	dlq, err := setupCh.QueueDeclare(DLQName, true, false, false, false, nil)
 	if err != nil {
-		ch.Close()
+		setupCh.Close()
 		conn.Close()
 		return nil, fmt.Errorf("rabbitmq: declare DLQ: %w", err)
 	}
-	if err := ch.QueueBind(dlq.Name, "", DLXName, false, nil); err != nil {
-		ch.Close()
+	if err := setupCh.QueueBind(dlq.Name, "", DLXName, false, nil); err != nil {
+		setupCh.Close()
 		conn.Close()
 		return nil, fmt.Errorf("rabbitmq: bind DLQ: %w", err)
 	}
 
 	// 3. Main exchange
-	if err := ch.ExchangeDeclare(Exchange, "direct", true, false, false, false, nil); err != nil {
-		ch.Close()
+	if err := setupCh.ExchangeDeclare(Exchange, "direct", true, false, false, false, nil); err != nil {
+		setupCh.Close()
 		conn.Close()
 		return nil, fmt.Errorf("rabbitmq: declare exchange: %w", err)
 	}
 
 	// 4. Main queue with DLX configured
-	if _, err := ch.QueueDeclare(
+	if _, err := setupCh.QueueDeclare(
 		QueueName, true, false, false, false,
 		amqp.Table{"x-dead-letter-exchange": DLXName},
 	); err != nil {
-		ch.Close()
+		setupCh.Close()
 		conn.Close()
 		return nil, fmt.Errorf("rabbitmq: declare main queue: %w", err)
 	}
 
 	// 5. Bind main queue to main exchange
-	if err := ch.QueueBind(QueueName, QueueName, Exchange, false, nil); err != nil {
-		ch.Close()
+	if err := setupCh.QueueBind(QueueName, QueueName, Exchange, false, nil); err != nil {
+		setupCh.Close()
 		conn.Close()
 		return nil, fmt.Errorf("rabbitmq: bind main queue: %w", err)
 	}
 
+	_ = setupCh.Close()
+
+	// Process multiple messages in parallel: one AMQP channel per worker.
+	// This avoids concurrent use of a single AMQP channel.
+	const workerCount = 5
+	channels := make([]*amqp.Channel, 0, workerCount)
+	for i := 0; i < workerCount; i++ {
+		ch, err := conn.Channel()
+		if err != nil {
+			for _, created := range channels {
+				_ = created.Close()
+			}
+			conn.Close()
+			return nil, fmt.Errorf("rabbitmq: open worker channel: %w", err)
+		}
+		// One unacked message per worker channel.
+		if err := ch.Qos(1, 0, false); err != nil {
+			_ = ch.Close()
+			for _, created := range channels {
+				_ = created.Close()
+			}
+			conn.Close()
+			return nil, fmt.Errorf("rabbitmq: set qos: %w", err)
+		}
+		channels = append(channels, ch)
+	}
+
 	return &RabbitMQConsumer{
 		conn:        conn,
-		ch:          ch,
+		channels:    channels,
 		sender:      sender,
 		redisClient: redisClient,
 		maxRetries:  maxRetries,
@@ -113,29 +134,49 @@ func New(amqpURL string, sender domain.EmailSender, redisClient *redis.Client, m
 
 // Start begins consuming messages. It blocks until Close() is called.
 func (c *RabbitMQConsumer) Start() error {
-	msgs, err := c.ch.Consume(
-		QueueName,
-		"",    // consumer tag
-		false, // manual ack
-		false, // exclusive
-		false, // no-local
-		false, // no-wait
-		nil,
-	)
-	if err != nil {
-		return fmt.Errorf("rabbitmq: consume: %w", err)
+	errCh := make(chan error, len(c.channels))
+
+	for i, ch := range c.channels {
+		msgs, err := ch.Consume(
+			QueueName,
+			fmt.Sprintf("notification-worker-%d", i),
+			false, // manual ack
+			false, // exclusive
+			false, // no-local
+			false, // no-wait
+			nil,
+		)
+		if err != nil {
+			return fmt.Errorf("rabbitmq: consume: %w", err)
+		}
+
+		go func(workerID int, deliveries <-chan amqp.Delivery) {
+			log.Printf("[Notification] Worker %d started. Listening on queue '%s'...", workerID, QueueName)
+			for {
+				select {
+				case <-c.done:
+					errCh <- nil
+					return
+				case msg, ok := <-deliveries:
+					if !ok {
+						errCh <- fmt.Errorf("rabbitmq: message channel closed (worker %d)", workerID)
+						return
+					}
+					c.handleMessage(msg)
+				}
+			}
+		}(i, msgs)
 	}
 
-	log.Printf("[Notification] Worker started. Listening on queue '%s'…", QueueName)
+	// Block until any worker errors or Close() is called.
 	for {
 		select {
 		case <-c.done:
 			return nil
-		case msg, ok := <-msgs:
-			if !ok {
-				return fmt.Errorf("rabbitmq: message channel closed")
+		case err := <-errCh:
+			if err != nil {
+				return err
 			}
-			c.handleMessage(msg)
 		}
 	}
 }
@@ -143,7 +184,7 @@ func (c *RabbitMQConsumer) Start() error {
 func (c *RabbitMQConsumer) handleMessage(msg amqp.Delivery) {
 	var event domain.PaymentCompletedEvent
 	if err := json.Unmarshal(msg.Body, &event); err != nil {
-		log.Printf("[Notification] Malformed message – sending to DLQ: %v", err)
+		log.Printf("[Notification] Malformed message - sending to DLQ: %v", err)
 		msg.Nack(false, false)
 		return
 	}
@@ -154,16 +195,16 @@ func (c *RabbitMQConsumer) handleMessage(msg amqp.Delivery) {
 
 	set, err := c.redisClient.SetNX(ctx, idempKey, "processing", idempotencyTTL).Result()
 	if err != nil {
-		log.Printf("[Notification] Redis idempotency check error for %s: %v – processing anyway", event.EventID, err)
+		log.Printf("[Notification] Redis idempotency check error for %s: %v - processing anyway", event.EventID, err)
 	} else if !set {
-		log.Printf("[Notification] Event %s already processed – skipping (idempotency)", event.EventID)
+		log.Printf("[Notification] Event %s already processed - skipping (idempotency)", event.EventID)
 		msg.Ack(false)
 		return
 	}
 
 	// --- Exponential Backoff Retry Loop ---
 	if err := c.sendWithBackoff(event); err != nil {
-		log.Printf("[Notification] All %d attempts exhausted for event %s: %v – DLQ", c.maxRetries, event.EventID, err)
+		log.Printf("[Notification] All %d attempts exhausted for event %s: %v - DLQ", c.maxRetries, event.EventID, err)
 		// Clear the idempotency marker so external requeue can retry later.
 		c.redisClient.Del(ctx, idempKey)
 		msg.Nack(false, false)
@@ -181,7 +222,7 @@ func (c *RabbitMQConsumer) handleMessage(msg amqp.Delivery) {
 }
 
 // sendWithBackoff attempts notification delivery with exponential backoff.
-// Delay schedule: 2s, 4s, 8s, … (doubles each attempt).
+// Delay schedule: 2s, 4s, 8s, ... (doubles each attempt).
 func (c *RabbitMQConsumer) sendWithBackoff(event domain.PaymentCompletedEvent) error {
 	backoff := 2 * time.Second
 	var lastErr error
@@ -196,7 +237,7 @@ func (c *RabbitMQConsumer) sendWithBackoff(event domain.PaymentCompletedEvent) e
 			attempt, c.maxRetries, event.EventID, lastErr)
 
 		if attempt < c.maxRetries {
-			log.Printf("[Notification] Backing off %s before retry…", backoff)
+			log.Printf("[Notification] Backing off %s before retry...", backoff)
 			time.Sleep(backoff)
 			backoff *= 2
 		}
@@ -212,8 +253,10 @@ func (c *RabbitMQConsumer) Close() {
 		}
 	}()
 	close(c.done)
-	if c.ch != nil {
-		c.ch.Close()
+	for _, ch := range c.channels {
+		if ch != nil {
+			_ = ch.Close()
+		}
 	}
 	if c.conn != nil {
 		c.conn.Close()

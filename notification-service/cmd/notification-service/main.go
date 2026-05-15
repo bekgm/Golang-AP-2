@@ -17,7 +17,7 @@ import (
 func main() {
 	amqpURL := getEnv("AMQP_URL", "amqp://guest:guest@localhost:5672/")
 	redisAddr := getEnv("REDIS_ADDR", "localhost:6379")
-	maxRetries := getEnvInt("MAX_RETRIES", 3)
+	maxRetries := getEnvInt("MAX_RETRIES", 5)
 
 	// --- Redis client ---
 	redisClient := redis.NewClient(&redis.Options{Addr: redisAddr})
@@ -37,9 +37,9 @@ func main() {
 		)
 		log.Println("[Notification] Using REAL SMTP email provider")
 	default:
-		// SIMULATED: 30% failure rate, 200ms simulated latency
-		sender = provider.NewSimulatedEmailSender(0.30, 200*time.Millisecond)
-		log.Println("[Notification] Using SIMULATED email provider (30% failure rate)")
+		// SIMULATED: 80% failure rate, 200ms simulated latency
+		sender = provider.NewSimulatedEmailSender(0.80, 200*time.Millisecond)
+		log.Println("[Notification] Using SIMULATED email provider (80% failure rate)")
 	}
 
 	// --- RabbitMQ consumer ---
