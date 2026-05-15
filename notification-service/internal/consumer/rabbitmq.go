@@ -33,12 +33,17 @@ type RabbitMQConsumer struct {
 	sender      domain.EmailSender
 	redisClient *redis.Client
 	maxRetries  int
+	workerCount int
 	done        chan struct{}
 }
 
 // New connects to RabbitMQ, declares the exchange/queue topology, and returns
 // a ready-to-use consumer.
-func New(amqpURL string, sender domain.EmailSender, redisClient *redis.Client, maxRetries int) (*RabbitMQConsumer, error) {
+func New(amqpURL string, sender domain.EmailSender, redisClient *redis.Client, maxRetries int, workerCount int) (*RabbitMQConsumer, error) {
+	if workerCount < 1 {
+		workerCount = 1
+	}
+
 	conn, err := amqp.Dial(amqpURL)
 	if err != nil {
 		return nil, fmt.Errorf("rabbitmq: dial: %w", err)
@@ -99,7 +104,6 @@ func New(amqpURL string, sender domain.EmailSender, redisClient *redis.Client, m
 
 	// Process multiple messages in parallel: one AMQP channel per worker.
 	// This avoids concurrent use of a single AMQP channel.
-	const workerCount = 5
 	channels := make([]*amqp.Channel, 0, workerCount)
 	for i := 0; i < workerCount; i++ {
 		ch, err := conn.Channel()
@@ -128,6 +132,7 @@ func New(amqpURL string, sender domain.EmailSender, redisClient *redis.Client, m
 		sender:      sender,
 		redisClient: redisClient,
 		maxRetries:  maxRetries,
+		workerCount: workerCount,
 		done:        make(chan struct{}),
 	}, nil
 }

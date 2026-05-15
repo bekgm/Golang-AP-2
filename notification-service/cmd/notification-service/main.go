@@ -18,6 +18,8 @@ func main() {
 	amqpURL := getEnv("AMQP_URL", "amqp://guest:guest@localhost:5672/")
 	redisAddr := getEnv("REDIS_ADDR", "localhost:6379")
 	maxRetries := getEnvInt("MAX_RETRIES", 5)
+	failureRate := getEnvFloat("FAILURE_RATE", 0.80)
+	workerCount := getEnvInt("WORKER_COUNT", 5)
 
 	// --- Redis client ---
 	redisClient := redis.NewClient(&redis.Options{Addr: redisAddr})
@@ -37,9 +39,9 @@ func main() {
 		)
 		log.Println("[Notification] Using REAL SMTP email provider")
 	default:
-		// SIMULATED: 80% failure rate, 200ms simulated latency
-		sender = provider.NewSimulatedEmailSender(0.80, 200*time.Millisecond)
-		log.Println("[Notification] Using SIMULATED email provider (80% failure rate)")
+		// SIMULATED: configurable failure rate and 200ms simulated latency
+		sender = provider.NewSimulatedEmailSender(failureRate, 200*time.Millisecond)
+		log.Printf("[Notification] Using SIMULATED email provider (failure rate %.0f%%)", failureRate*100)
 	}
 
 	// --- RabbitMQ consumer ---
@@ -47,7 +49,7 @@ func main() {
 	var err error
 
 	for attempt := 1; attempt <= 10; attempt++ {
-		c, err = consumer.New(amqpURL, sender, redisClient, maxRetries)
+		c, err = consumer.New(amqpURL, sender, redisClient, maxRetries, workerCount)
 		if err == nil {
 			break
 		}
@@ -86,6 +88,15 @@ func getEnv(key, fallback string) string {
 func getEnvInt(key string, fallback int) int {
 	if v := os.Getenv(key); v != "" {
 		if parsed, err := strconv.Atoi(v); err == nil {
+			return parsed
+		}
+	}
+	return fallback
+}
+
+func getEnvFloat(key string, fallback float64) float64 {
+	if v := os.Getenv(key); v != "" {
+		if parsed, err := strconv.ParseFloat(v, 64); err == nil {
 			return parsed
 		}
 	}
