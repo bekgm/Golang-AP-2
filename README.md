@@ -74,7 +74,7 @@ On success the value is updated to `"done"`. On total failure (all retries exhau
 | `RATE_LIMIT_MAX` | order | `10` | Max requests per window per IP |
 | `RATE_LIMIT_WINDOW_SECS` | order | `60` | Rate limit window in seconds |
 | `PROVIDER_MODE` | notification | `SIMULATED` | `SIMULATED` or `REAL` |
-| `MAX_RETRIES` | notification | `3` | Max email delivery attempts |
+| `MAX_RETRIES` | notification | `5` | Max email delivery attempts |
 | `SMTP_HOST` | notification | — | SMTP server host (REAL mode) |
 | `SMTP_PORT` | notification | `587` | SMTP server port (REAL mode) |
 | `SMTP_USER` | notification | — | SMTP username (REAL mode) |

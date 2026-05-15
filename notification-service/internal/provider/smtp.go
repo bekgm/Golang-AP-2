@@ -6,7 +6,6 @@ import (
 	"log"
 	"net/smtp"
 	"notification-service/internal/domain"
-	"strings"
 )
 
 // SMTPEmailSender is the real provider adapter that delivers notifications
@@ -32,31 +31,22 @@ func NewSMTPEmailSender(host, port, username, password, from string) *SMTPEmailS
 
 // Send delivers an email notification for a completed payment event.
 func (s *SMTPEmailSender) Send(event domain.PaymentCompletedEvent) error {
-	addr := fmt.Sprintf("%s:%s", s.host, s.port)
-	tlsConfig := &tls.Config{ServerName: s.host}
-
-	// Port 465 usually expects implicit TLS, while 587/25 use plain SMTP with STARTTLS.
-	var client *smtp.Client
-	var err error
-	if s.port == "465" {
-		conn, dialErr := tls.Dial("tcp", addr, tlsConfig)
-		if dialErr != nil {
-			return fmt.Errorf("smtp: tls dial failed: %w", dialErr)
-		}
-		client, err = smtp.NewClient(conn, s.host)
-	} else {
-		client, err = smtp.Dial(addr)
-		if err == nil {
-			if ok, _ := client.Extension("STARTTLS"); ok {
-				if err = client.StartTLS(tlsConfig); err != nil {
-					client.Close()
-					return fmt.Errorf("smtp: starttls failed: %w", err)
-				}
-			}
-		}
+	// Create TLS connection
+	tlsconfig := &tls.Config{
+		ServerName: s.host,
 	}
+
+	addr := fmt.Sprintf("%s:%s", s.host, s.port)
+	conn, err := tls.Dial("tcp", addr, tlsconfig)
 	if err != nil {
 		return fmt.Errorf("smtp: dial failed: %w", err)
+	}
+	defer conn.Close()
+
+	// Create SMTP client
+	client, err := smtp.NewClient(conn, s.host)
+	if err != nil {
+		return fmt.Errorf("smtp: new client failed: %w", err)
 	}
 	defer client.Close()
 
@@ -91,7 +81,7 @@ func (s *SMTPEmailSender) Send(event domain.PaymentCompletedEvent) error {
 	if err != nil {
 		return fmt.Errorf("smtp: data failed: %w", err)
 	}
-	_, err = wc.Write([]byte(msg))
+	_, err = fmt.Fprintf(wc, msg)
 	if err != nil {
 		return fmt.Errorf("smtp: fprintf failed: %w", err)
 	}
@@ -100,9 +90,9 @@ func (s *SMTPEmailSender) Send(event domain.PaymentCompletedEvent) error {
 		return fmt.Errorf("smtp: close failed: %w", err)
 	}
 
-	if err = client.Quit(); err != nil && !strings.Contains(err.Error(), "EOF") {
-		return fmt.Errorf("smtp: quit failed: %w", err)
-	}
+	client.Quit()
+	return nil
+
 	log.Printf("[SMTPEmail] Sent notification to %s for order %s", event.CustomerEmail, event.OrderID)
 	return nil
 }
