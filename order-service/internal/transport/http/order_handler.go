@@ -62,7 +62,7 @@ func (h *OrderHandler) CreateOrder(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusCreated, toResponse(output.Order))
+	c.JSON(http.StatusAccepted, toResponse(output.Order))
 }
 
 func (h *OrderHandler) GetOrder(c *gin.Context) {
