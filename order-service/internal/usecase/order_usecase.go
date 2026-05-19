@@ -52,7 +52,6 @@ func (uc *OrderUseCase) CreateOrder(input CreateOrderInput) (*CreateOrderOutput,
 	if input.IdempotencyKey != "" {
 		existing, err := uc.repo.FindByIdempotencyKey(input.IdempotencyKey)
 		if err == nil && existing != nil {
-
 			return &CreateOrderOutput{Order: existing}, nil
 		}
 	}
@@ -63,26 +62,30 @@ func (uc *OrderUseCase) CreateOrder(input CreateOrderInput) (*CreateOrderOutput,
 		return nil, fmt.Errorf("failed to save order: %w", err)
 	}
 
+	// Process payment asynchronously — caller gets 202 Accepted immediately.
+	go uc.processPayment(order)
+
+	return &CreateOrderOutput{Order: order}, nil
+}
+
+func (uc *OrderUseCase) processPayment(order *domain.Order) {
 	payResp, err := uc.paymentClient.Authorize(domain.PaymentRequest{
 		OrderID: order.ID,
 		Amount:  order.Amount,
 	})
 
 	if err != nil {
-
+		log.Printf("[OrderUseCase] payment failed for order %s: %v", order.ID, err)
 		order.Status = domain.StatusFailed
-		_ = uc.repo.Update(order)
-		return nil, fmt.Errorf("payment service unavailable: %w", err)
-	}
-
-	if payResp.Status == "Authorized" {
+	} else if payResp.Status == "Authorized" {
 		order.Status = domain.StatusPaid
 	} else {
 		order.Status = domain.StatusFailed
 	}
 
 	if err := uc.repo.Update(order); err != nil {
-		return nil, fmt.Errorf("failed to update order status: %w", err)
+		log.Printf("[OrderUseCase] failed to update order %s status to %s: %v", order.ID, order.Status, err)
+		return
 	}
 
 	// Invalidate cache after status change so stale data is never served.
@@ -90,7 +93,7 @@ func (uc *OrderUseCase) CreateOrder(input CreateOrderInput) (*CreateOrderOutput,
 		log.Printf("[OrderUseCase] cache invalidation failed for %s: %v", order.ID, err)
 	}
 
-	return &CreateOrderOutput{Order: order}, nil
+	log.Printf("[OrderUseCase] order %s processed asynchronously → status: %s", order.ID, order.Status)
 }
 
 func (uc *OrderUseCase) GetOrder(id string) (*domain.Order, error) {

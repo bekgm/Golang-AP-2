@@ -80,7 +80,7 @@ services:
       DB_NAME: payments_db
       AMQP_URL: "amqp://guest:guest@rabbitmq:5672/"
     ports:
-      - "8081:8081"
+      - "8083:8081"
       - "9091:9091"
     depends_on:
       payments-db:

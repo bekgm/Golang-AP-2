@@ -1,0 +1,39 @@
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Go build artifacts
+bin/
+*.exe
+*.dll
+*.so
+*.dylib
+*.out
+*.test
+coverage.out
+cover.out
+
+# Logs
+*.log
+logs/
+
+# IDE / editor settings
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Temporary / cache files
+.tmp/
+tmp/
+temp/
+*.tmp
+
+# OS-specific
+desktop.ini
+
+# Optional local runtime data
+*.pid
