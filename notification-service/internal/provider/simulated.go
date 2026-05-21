@@ -8,12 +8,9 @@ import (
 	"time"
 )
 
-// SimulatedEmailSender is a mock adapter that simulates real-world email
-// sending conditions: artificial latency and random transient failures.
-// It is selected when PROVIDER_MODE=SIMULATED.
 type SimulatedEmailSender struct {
-	failureRate float64       // probability of a transient failure [0, 1)
-	latency     time.Duration // simulated network latency per send
+	failureRate float64  
+	latency     time.Duration
 }
 
 // NewSimulatedEmailSender creates a sender with configurable failure rate and latency.
@@ -24,9 +21,6 @@ func NewSimulatedEmailSender(failureRate float64, latency time.Duration) *Simula
 	}
 }
 
-// Send simulates sending an email notification.
-// It blocks for the configured latency then randomly returns an error to
-// exercise the caller's retry / backoff logic.
 func (s *SimulatedEmailSender) Send(event domain.PaymentCompletedEvent) error {
 	// Simulate network round-trip time.
 	time.Sleep(s.latency)

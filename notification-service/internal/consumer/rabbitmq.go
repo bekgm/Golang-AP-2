@@ -227,7 +227,6 @@ func (c *RabbitMQConsumer) handleMessage(msg amqp.Delivery) {
 }
 
 // sendWithBackoff attempts notification delivery with exponential backoff.
-// Delay schedule: 2s, 4s, 8s, ... (doubles each attempt).
 func (c *RabbitMQConsumer) sendWithBackoff(event domain.PaymentCompletedEvent) error {
 	backoff := 2 * time.Second
 	var lastErr error
